@@ -8,6 +8,7 @@
     "tunnel": "npx localtunnel --port 3001"
   },
   "dependencies": {
+    "@google-cloud/storage": "^8.2.0",
     "express": "^5.2.1",
     "multer": "^2.1.1",
     "pizzip": "^3.2.0",

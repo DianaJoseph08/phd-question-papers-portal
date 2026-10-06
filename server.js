@@ -4,9 +4,13 @@ const path = require('path');
 const fs = require('fs');
 const multer = require('multer');
 const PizzaZip = require('pizzip');
+const cloudStorage = require('./cloud_storage');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
+
+// Initialize Google Cloud Storage Bucket
+cloudStorage.ensureBucketExists().catch(e => console.warn('[Storage] Bucket init warning:', e.message));
 
 // Middleware
 app.use(express.json({ limit: '50mb' }));
@@ -631,6 +635,10 @@ app.post('/api/hod/upload-question-paper', requireAuth(['hod']), upload.single('
                     fs.copyFileSync(req.file.path, legacyPath);
                     if (fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
 
+                    // Permanent Cloud Storage Bucket: Save/Overwrite in Google Cloud Storage
+                    const gcsKey = `Jan27/${campusCode}/${deptCode}/${standardFilename}`;
+                    cloudStorage.saveToCloudStorage(organizedFilePath, gcsKey).catch(e => console.warn('[Storage] GCS upload:', e.message));
+
                     // Save to database
                     const relativeFilePath = `/uploads/Jan27/${campusCode}/${deptCode}/${standardFilename}`;
                     db.serialize(() => {
@@ -746,6 +754,9 @@ app.delete('/api/question-papers/:id', requireAuth(['hod', 'admin', 'super_admin
                             if (fs.existsSync(diskPath)) {
                                 try { fs.unlinkSync(diskPath); } catch (e) {}
                             }
+                            // Delete from Google Cloud Storage Bucket
+                            const gcsKey = paper.file_path.replace(/^\/uploads\//, '');
+                            cloudStorage.deleteFromCloudStorage(gcsKey).catch(e => console.warn('[Storage] GCS delete:', e.message));
                         }
 
                         res.json({ success: true, message: 'Question paper deleted successfully.' });
@@ -776,7 +787,13 @@ app.get('/api/question-papers/download/:id', requireAuth(['hod', 'coordinator', 
         for (const p of candidatePaths) {
             if (fs.existsSync(p)) { diskPath = p; break; }
         }
-        if (!diskPath) return res.status(404).json({ error: 'Physical file not found on server' });
+        if (!diskPath) {
+            const gcsKey = paper.file_path ? paper.file_path.replace(/^\/uploads\//, '') : null;
+            if (gcsKey && cloudStorage.streamFromCloudStorage(gcsKey, res, paper.file_name)) {
+                return;
+            }
+            return res.status(404).json({ error: 'Physical file not found on server or cloud bucket' });
+        }
         res.download(diskPath, paper.file_name);
     });
 });
@@ -999,6 +1016,10 @@ app.post('/api/coordinator/upload-rm-question-paper', requireAuth(['coordinator'
                 fs.copyFileSync(req.file.path, legacyPath);
                 if (fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
 
+                // Permanent Cloud Storage Bucket: Save/Overwrite in Google Cloud Storage
+                const gcsKey = `Jan27/${campusCode}/${deptCode}/${standardFilename}`;
+                cloudStorage.saveToCloudStorage(organizedFilePath, gcsKey).catch(e => console.warn('[Storage] GCS upload:', e.message));
+
                 const relativeFilePath = `/uploads/Jan27/${campusCode}/${deptCode}/${standardFilename}`;
                 db.serialize(() => {
                     db.run('BEGIN TRANSACTION');
@@ -1109,6 +1130,9 @@ app.delete('/api/coordinator/rm-question-paper/:id', requireAuth(['coordinator',
                             if (fs.existsSync(diskPath)) {
                                 try { fs.unlinkSync(diskPath); } catch (e) {}
                             }
+                            // Delete from Google Cloud Storage Bucket
+                            const gcsKey = paper.file_path.replace(/^\/uploads\//, '');
+                            cloudStorage.deleteFromCloudStorage(gcsKey).catch(e => console.warn('[Storage] GCS delete:', e.message));
                         }
 
                         res.json({ success: true, message: 'Question paper deleted successfully.' });
@@ -1304,7 +1328,7 @@ app.get('/api/admin/question-papers/export-drive-zip', requireAuth(['admin', 'su
         JOIN campuses c ON qp.campus_id = c.id
         WHERE qp.set_name IN ('A', 'B')
         ORDER BY c.name, d.name, qp.set_name
-    `, [], (err, rows) => {
+    `, [], async (err, rows) => {
         if (err) return res.status(500).json({ error: err.message });
         if (!rows || rows.length === 0) {
             return res.status(400).json({ error: 'No Set A or Set B question papers uploaded yet.' });
@@ -1314,7 +1338,7 @@ app.get('/api/admin/question-papers/export-drive-zip', requireAuth(['admin', 'su
             const zip = new PizzaZip();
             let addedCount = 0;
 
-            rows.forEach(paper => {
+            for (const paper of rows) {
                 const campusCode = getCampusCode(paper.campus_name, paper.campus_id);
                 const deptCode = getDepartmentCode(paper.dept_name);
                 const standardFilename = `${campusCode}_${paper.set_name}_${deptCode}_${session}.docx`;
@@ -1330,6 +1354,10 @@ app.get('/api/admin/question-papers/export-drive-zip', requireAuth(['admin', 'su
                     fileBuffer = fs.readFileSync(directPath);
                 } else if (fs.existsSync(legacyPath)) {
                     fileBuffer = fs.readFileSync(legacyPath);
+                } else {
+                    // Fallback to Google Cloud Storage permanent bucket
+                    const gcsKey = `Jan27/${campusCode}/${deptCode}/${standardFilename}`;
+                    fileBuffer = await cloudStorage.getBufferFromCloudStorage(gcsKey);
                 }
 
                 if (fileBuffer) {
@@ -1337,10 +1365,10 @@ app.get('/api/admin/question-papers/export-drive-zip', requireAuth(['admin', 'su
                     zip.file(zipPath, fileBuffer);
                     addedCount++;
                 }
-            });
+            }
 
             if (addedCount === 0) {
-                return res.status(404).json({ error: 'Could not find physical question paper files on disk to package.' });
+                return res.status(404).json({ error: 'Could not find physical question paper files on disk or in cloud bucket.' });
             }
 
             const zipBuffer = zip.generate({ type: 'nodebuffer' });
