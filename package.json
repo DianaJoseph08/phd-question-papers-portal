@@ -1,0 +1,16 @@
+{
+  "name": "phd_question_papers_portal",
+  "version": "1.0.0",
+  "description": "SRMIST PhD Entrance Examination Question Papers Portal",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "tunnel": "npx localtunnel --port 3001"
+  },
+  "dependencies": {
+    "express": "^5.2.1",
+    "multer": "^2.1.1",
+    "pizzip": "^3.2.0",
+    "sqlite3": "^6.0.1"
+  }
+}

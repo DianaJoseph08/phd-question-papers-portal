@@ -1,0 +1,430 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SRMIST PhD Entrance Examination - Question Papers Portal</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <!-- Top Navigation Header -->
+    <header class="app-header">
+        <div class="header-left">
+            <div class="logo-box">
+                <i class="fa-solid fa-graduation-cap"></i>
+            </div>
+            <div>
+                <h1>SRM INSTITUTE OF SCIENCE AND TECHNOLOGY</h1>
+                <p class="subtitle">Directorate of Research &bull; PhD Entrance Exam Portal (Jan 2027)</p>
+            </div>
+        </div>
+        <div class="header-right" id="user-nav" style="display: none;">
+            <div class="user-badge">
+                <span class="user-name" id="nav-user-name">User</span>
+                <span class="user-role" id="nav-user-role">HOD</span>
+            </div>
+            <button class="btn btn-secondary btn-sm" onclick="handleLogout()" title="Logout">
+                <i class="fa-solid fa-right-from-bracket"></i> Logout
+            </button>
+        </div>
+    </header>
+
+    <!-- Main Content Container -->
+    <main class="main-container">
+        <!-- Toast Notification -->
+        <div id="toast" class="toast"></div>
+
+        <!-- View 1: Login Screen -->
+        <section id="view-login" class="view-section">
+            <div class="login-card">
+                <div class="login-header">
+                    <div class="login-icon">
+                        <i class="fa-solid fa-file-shield"></i>
+                    </div>
+                    <h2>Question Papers Portal</h2>
+                    <p>January 2027 Ph.D. Entrance Examination</p>
+                </div>
+
+                <form id="login-form" onsubmit="handleLogin(event)">
+                    <div class="form-group">
+                        <label for="username"><i class="fa-solid fa-user"></i> Username</label>
+                        <input type="text" id="username" class="form-control" placeholder="Enter HOD or Admin username" required autocomplete="username">
+                    </div>
+
+                    <div class="form-group">
+                        <label for="password"><i class="fa-solid fa-lock"></i> Password</label>
+                        <input type="password" id="password" class="form-control" placeholder="Enter password" required autocomplete="current-password">
+                    </div>
+
+                    <button type="submit" id="login-btn" class="btn btn-primary btn-block">
+                        <i class="fa-solid fa-arrow-right-to-bracket"></i> Sign In to Portal
+                    </button>
+                </form>
+
+                <div class="login-footer">
+                    <p><i class="fa-solid fa-circle-info"></i> Head of Departments can log in with their existing departmental credentials (e.g. <code>hod_et_mech_rmp</code>, <code>hod_et_cse_rmp</code>).</p>
+                </div>
+            </div>
+        </section>
+
+        <!-- View 2: HOD Portal -->
+        <section id="view-hod" class="view-section" style="display: none;">
+            <!-- Department Info Banner -->
+            <div class="dept-banner">
+                <div class="dept-info">
+                    <span class="campus-badge" id="hod-campus-badge">Ramapuram</span>
+                    <h2 id="hod-dept-name">Department of Mechanical Engineering</h2>
+                    <p id="hod-inst-name"><i class="fa-solid fa-building-columns"></i> Faculty of Engineering and Technology</p>
+                </div>
+                <div class="template-action" style="display: flex; gap: 10px; flex-wrap: wrap;">
+                    <a href="/templates/SRMIST_PhD_QP_Template_Set_A_Jan2027.docx" download="SRMIST_PhD_QP_Template_Set_A_Jan2027.docx" class="btn btn-template">
+                        <i class="fa-solid fa-file-word"></i> Download Set A Template (.docx)
+                    </a>
+                    <a href="/templates/SRMIST_PhD_QP_Template_Set_B_Jan2027.docx" download="SRMIST_PhD_QP_Template_Set_B_Jan2027.docx" class="btn btn-template" style="background: #4f46e5;">
+                        <i class="fa-solid fa-file-word"></i> Download Set B Template (.docx)
+                    </a>
+                </div>
+            </div>
+
+            <!-- Guidelines Card -->
+            <div class="guidelines-card">
+                <div class="guidelines-title">
+                    <i class="fa-solid fa-triangle-exclamation" style="color: #f59e0b;"></i>
+                    <h3>Submission Rules & Strict Duplicate Policy</h3>
+                </div>
+                <ul class="guidelines-list">
+                    <li><strong>2 Separate Sets Required:</strong> Each department must upload both <strong>Set A</strong> and <strong>Set B</strong> in the prescribed DOCX format.</li>
+                    <li><strong>50 MCQs Total:</strong> 25 questions in <strong>Section A</strong> (Research Methodology) and 25 questions in <strong>Section B</strong> (Subject-Specific Core Topics).</li>
+                    <li><strong style="color: #ef4444;">Duplicate Detection Limit (≤ 10 Repeated Questions):</strong> The system verifies each question against the past two exam sessions (January 2026 & July 2026). If a paper contains <strong>more than 10 repeated questions</strong>, it will be automatically <strong>rejected</strong> with a detailed question-by-question match report.</li>
+                    <li><strong>Standard Automatic Naming:</strong> Approved uploads are automatically formatted and stored as <code>[CAMPUS]_[SET]_[DEPT]_Jan27.docx</code> (e.g., <code>RMP_A_CSE_Jan27.docx</code>).</li>
+                </ul>
+            </div>
+
+            <!-- Upload Slots Grid (Set A and Set B) -->
+            <div class="upload-grid">
+                <!-- Slot Set A -->
+                <div class="upload-card" id="slot-set-a">
+                    <div class="card-header">
+                        <div class="set-title">
+                            <span class="set-letter-badge set-a">A</span>
+                            <div>
+                                <h4>Question Paper - Set A</h4>
+                                <span class="session-label">January 2027 Session</span>
+                            </div>
+                        </div>
+                        <span class="status-badge" id="status-badge-a">Not Uploaded</span>
+                    </div>
+
+                    <div class="card-body" id="body-set-a">
+                        <!-- Content dynamically rendered via app.js -->
+                    </div>
+                </div>
+
+                <!-- Slot Set B -->
+                <div class="upload-card" id="slot-set-b">
+                    <div class="card-header">
+                        <div class="set-title">
+                            <span class="set-letter-badge set-b">B</span>
+                            <div>
+                                <h4>Question Paper - Set B</h4>
+                                <span class="session-label">January 2027 Session</span>
+                            </div>
+                        </div>
+                        <span class="status-badge" id="status-badge-b">Not Uploaded</span>
+                    </div>
+
+                    <div class="card-body" id="body-set-b">
+                        <!-- Content dynamically rendered via app.js -->
+                    </div>
+                </div>
+            </div>
+
+            <!-- Past Question Papers Reference Section -->
+            <div class="past-papers-section">
+                <div class="section-header">
+                    <div>
+                        <h3><i class="fa-solid fa-clock-rotate-left"></i> Reference Past Question Papers</h3>
+                        <p>Past question papers from January 2026 &amp; July 2026 sessions for your department with verified database status.</p>
+                    </div>
+                    <div class="status-summary-tag">
+                        <span id="past-papers-summary-count"><i class="fa-solid fa-check-circle"></i> Loading...</span>
+                    </div>
+                </div>
+
+                <div class="table-container past-papers-table-wrapper">
+                    <table class="data-table past-papers-table">
+                        <thead>
+                            <tr>
+                                <th style="width: 200px;">Session &amp; Set</th>
+                                <th>Question Paper File</th>
+                                <th style="width: 280px;">Database Status</th>
+                                <th style="width: 170px; text-align: center;">Action</th>
+                            </tr>
+                        </thead>
+                        <tbody id="past-papers-tbody">
+                            <tr>
+                                <td colspan="4" class="text-center py-4">
+                                    <i class="fa-solid fa-spinner fa-spin"></i> Loading past question papers...
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+
+        <!-- View 3: Admin Portal -->
+        <section id="view-admin" class="view-section" style="display: none;">
+            <div class="admin-topbar">
+                <div>
+                    <h2>Question Papers Matrix & Export</h2>
+                    <p>Overview of January 2027 question paper submissions across all departments and campuses.</p>
+                </div>
+                <div class="admin-actions">
+                    <a href="/api/admin/question-papers/export-drive-zip" download class="btn btn-drive-zip">
+                        <i class="fa-solid fa-file-zipper"></i> Export All for Google Drive (ZIP)
+                    </a>
+                </div>
+            </div>
+
+            <!-- Stats Bar -->
+            <div class="stats-row">
+                <div class="stat-card">
+                    <div class="stat-number" id="stat-total-depts">0</div>
+                    <div class="stat-label">Total Departments</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number" id="stat-set-a-done" style="color: #3b82f6;">0</div>
+                    <div class="stat-label">Set A Submitted</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number" id="stat-set-b-done" style="color: #8b5cf6;">0</div>
+                    <div class="stat-label">Set B Submitted</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number" id="stat-fully-complete" style="color: #10b981;">0</div>
+                    <div class="stat-label">Fully Completed (Both Sets)</div>
+                </div>
+            </div>
+
+            <!-- Filters & Search -->
+            <div class="admin-filters">
+                <div class="filter-tabs">
+                    <button class="filter-btn active" onclick="filterAdminMatrix('all', this)">All Campuses</button>
+                    <button class="filter-btn" onclick="filterAdminMatrix('Ramapuram', this)">Ramapuram</button>
+                    <button class="filter-btn" onclick="filterAdminMatrix('Trichy', this)">Trichy</button>
+                </div>
+                <div class="search-box">
+                    <i class="fa-solid fa-magnifying-glass"></i>
+                    <input type="text" id="admin-search-input" placeholder="Search department name..." oninput="searchAdminMatrix(this.value)">
+                </div>
+            </div>
+
+            <!-- Matrix Table -->
+            <div class="table-container">
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>Department</th>
+                            <th>Campus</th>
+                            <th>Set A Status</th>
+                            <th>Set B Status</th>
+                            <th>Overall Status</th>
+                        </tr>
+                    </thead>
+                    <tbody id="admin-matrix-tbody">
+                        <tr><td colspan="5" class="text-center">Loading matrix...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <!-- View 4: Research Coordinator Portal -->
+        <section id="view-coordinator" class="view-section" style="display: none;">
+            <!-- Coordinator Banner -->
+            <div class="dept-banner coordinator-banner">
+                <div class="dept-info">
+                    <span class="campus-badge" id="coord-campus-badge">Ramapuram</span>
+                    <h2 id="coord-name">Dr. Vani R</h2>
+                    <p id="coord-inst-name"><i class="fa-solid fa-building-columns"></i> Faculty Research Coordinator &bull; Faculty of Engineering and Technology</p>
+                </div>
+                <div class="template-action" style="display: flex; gap: 10px; flex-wrap: wrap;">
+                    <a href="/templates/SRMIST_PhD_QP_Template_Set_A_Jan2027.docx" download="SRMIST_PhD_QP_Template_Set_A_Jan2027.docx" class="btn btn-template">
+                        <i class="fa-solid fa-file-word"></i> Download Set A Template (.docx)
+                    </a>
+                    <a href="/templates/SRMIST_PhD_QP_Template_Set_B_Jan2027.docx" download="SRMIST_PhD_QP_Template_Set_B_Jan2027.docx" class="btn btn-template" style="background: #4f46e5;">
+                        <i class="fa-solid fa-file-word"></i> Download Set B Template (.docx)
+                    </a>
+                </div>
+            </div>
+
+            <!-- Guidelines Card -->
+            <div class="guidelines-card">
+                <div class="guidelines-title">
+                    <i class="fa-solid fa-book-open-reader" style="color: #6366f1;"></i>
+                    <h3>Common Research Methodology Coordination (Section A)</h3>
+                </div>
+                <ul class="guidelines-list">
+                    <li><strong>Common Section A (Set A &amp; Set B):</strong> As Research Coordinator, you upload the common Research Methodology papers (25 MCQs) for all Engineering &amp; Technology departments on your campus.</li>
+                    <li><strong>Strict Duplicate Detection (≤ 10 Repeated MCQs):</strong> Submissions are automatically checked against past Common RM sessions (January 2026 &amp; July 2026). Max 10 duplicates permitted.</li>
+                    <li><strong>Standard Automatic Naming:</strong> Saved as <code>[CAMPUS]_Common_RM_A_Jan27.docx</code> and <code>[CAMPUS]_Common_RM_B_Jan27.docx</code>.</li>
+                </ul>
+            </div>
+
+            <!-- Upload Slots Grid (Common RM Set A and Set B) -->
+            <div class="upload-grid">
+                <!-- Slot Set A -->
+                <div class="upload-card" id="coord-slot-set-a">
+                    <div class="card-header">
+                        <div class="set-title">
+                            <span class="set-letter-badge set-a">A</span>
+                            <div>
+                                <h4>Common Research Methodology - Set A</h4>
+                                <span class="session-label">January 2027 Session</span>
+                            </div>
+                        </div>
+                        <span class="status-badge" id="coord-status-badge-a">Not Uploaded</span>
+                    </div>
+                    <div class="card-body" id="coord-body-set-a"></div>
+                </div>
+
+                <!-- Slot Set B -->
+                <div class="upload-card" id="coord-slot-set-b">
+                    <div class="card-header">
+                        <div class="set-title">
+                            <span class="set-letter-badge set-b">B</span>
+                            <div>
+                                <h4>Common Research Methodology - Set B</h4>
+                                <span class="session-label">January 2027 Session</span>
+                            </div>
+                        </div>
+                        <span class="status-badge" id="coord-status-badge-b">Not Uploaded</span>
+                    </div>
+                    <div class="card-body" id="coord-body-set-b"></div>
+                </div>
+            </div>
+
+            <!-- Reference Past Question Papers (Common RM) -->
+            <div class="past-papers-section">
+                <div class="section-header">
+                    <div>
+                        <h3><i class="fa-solid fa-clock-rotate-left"></i> Reference Past Common Research Methodology Papers</h3>
+                        <p>Past question papers from January 2026 &amp; July 2026 sessions for Common Research Methodology.</p>
+                    </div>
+                </div>
+                <div class="table-container past-papers-table-wrapper">
+                    <table class="data-table past-papers-table">
+                        <thead>
+                            <tr>
+                                <th style="width: 170px;">Session &amp; Set</th>
+                                <th style="width: 220px;">Category</th>
+                                <th>Question Paper File</th>
+                                <th style="width: 260px;">Database Status</th>
+                                <th style="width: 160px; text-align: center;">Action</th>
+                            </tr>
+                        </thead>
+                        <tbody id="coord-past-papers-tbody">
+                            <tr>
+                                <td colspan="5" class="text-center py-4">
+                                    <i class="fa-solid fa-spinner fa-spin"></i> Loading past common RM papers...
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Faculty Department Submissions Overview -->
+            <div class="past-papers-section" style="margin-top: 2rem;">
+                <div class="section-header">
+                    <div>
+                        <h3><i class="fa-solid fa-list-check"></i> Engineering &amp; Technology Departments Progress</h3>
+                        <p>Live status of Set A and Set B submissions across departments under your faculty.</p>
+                    </div>
+                </div>
+                <div class="table-container">
+                    <table class="data-table">
+                        <thead>
+                            <tr>
+                                <th>Department Name</th>
+                                <th>Campus</th>
+                                <th>Set A Status</th>
+                                <th>Set B Status</th>
+                                <th>Overall Status</th>
+                            </tr>
+                        </thead>
+                        <tbody id="coord-dept-status-tbody">
+                            <tr>
+                                <td colspan="5" class="text-center py-4">Loading department statuses...</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <!-- Modal: Rejection & Duplicate Questions Comparison Table -->
+    <div id="duplicate-modal" class="modal-overlay" style="display: none;">
+        <div class="modal-card">
+            <div class="modal-header modal-header-danger">
+                <div class="modal-header-icon">
+                    <i class="fa-solid fa-circle-xmark"></i>
+                </div>
+                <div>
+                    <h3 id="modal-title">Upload Rejected: Too Many Repeated Questions</h3>
+                    <p id="modal-subtitle">Maximum of 10 repeated questions allowed from past sessions.</p>
+                </div>
+                <button class="btn-close" onclick="closeDuplicateModal()">&times;</button>
+            </div>
+
+            <div class="modal-body">
+                <div class="alert-box alert-danger" id="modal-alert-box">
+                    <strong>Detection Summary:</strong> 
+                    <span id="modal-summary-text">Your uploaded question paper contains 14 repeated questions from past sessions.</span>
+                </div>
+
+                <div class="table-actions">
+                    <p class="table-caption">Detailed Question Match Comparison:</p>
+                    <button class="btn btn-secondary btn-sm" onclick="exportDuplicatesCSV()">
+                        <i class="fa-solid fa-file-csv"></i> Download Match Report (CSV)
+                    </button>
+                </div>
+
+                <div class="modal-table-scroll">
+                    <table class="comparison-table">
+                        <thead>
+                            <tr>
+                                <th style="width: 140px;">Uploaded Q. No.</th>
+                                <th style="width: 100px;">Section</th>
+                                <th style="width: 160px;">Matched Past Session</th>
+                                <th style="width: 140px;">Matched Set & Q.No</th>
+                                <th>Question Text Preview</th>
+                            </tr>
+                        </thead>
+                        <tbody id="duplicate-table-body">
+                            <!-- Populated dynamically -->
+                        </tbody>
+                    </table>
+                </div>
+
+                <div class="modal-instructions">
+                    <i class="fa-solid fa-circle-info"></i>
+                    <span>Please review the matched questions in your Word document, replace duplicate questions with new questions so the total duplicates are <strong>10 or fewer</strong>, and upload again.</span>
+                </div>
+            </div>
+
+            <div class="modal-footer">
+                <button class="btn btn-primary" onclick="closeDuplicateModal()">
+                    <i class="fa-solid fa-pen-to-square"></i> Revise Document & Re-upload
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Scripts -->
+    <script src="app.js"></script>
+</body>
+</html>
