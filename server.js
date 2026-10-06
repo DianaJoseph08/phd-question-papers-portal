@@ -119,7 +119,61 @@ function getDepartmentCode(deptName) {
     return clean.replace(/[^a-zA-Z]/g, '').slice(0, 6).toUpperCase() || 'DEPT';
 }
 
-// DOCX MCQ Parser
+// ─────────────────────────────────────────────────────────────────────────────
+// ACCURATE DOCX MCQ PARSER & QUESTION SIMILARITY ENGINE
+// ─────────────────────────────────────────────────────────────────────────────
+
+const STOP_WORDS = new Set([
+    'which', 'of', 'the', 'following', 'is', 'a', 'an', 'what', 'are', 'in', 'to', 'for', 'from',
+    'and', 'or', 'by', 'with', 'that', 'this', 'these', 'those', 'how', 'when', 'where', 'why',
+    'who', 'not', 'correct', 'incorrect', 'statement', 'statements', 'true', 'false', 'given',
+    'below', 'select', 'choose', 'consider', 'identify', 'according', 'type', 'types', 'called',
+    'known', 'as', 'one', 'two', 'three', 'four', 'can', 'be', 'does', 'do', 'has', 'have', 'had'
+]);
+
+function getSignificantTokens(text) {
+    if (!text) return [];
+    return text.toLowerCase()
+        .replace(/[^a-z0-9\s]/g, ' ')
+        .split(/\s+/)
+        .filter(w => w.length > 2 && !STOP_WORDS.has(w));
+}
+
+function computeSimilarity(q1Text, q2Text) {
+    const clean1 = (q1Text || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    const clean2 = (q2Text || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+
+    if (!clean1 || !clean2) return { isMatch: false, score: 0 };
+    if (clean1 === clean2 && clean1.length > 10) {
+        return { isMatch: true, score: 100, type: 'Exact Match' };
+    }
+
+    const t1 = getSignificantTokens(q1Text);
+    const t2 = getSignificantTokens(q2Text);
+
+    if (t1.length < 3 || t2.length < 3) {
+        if (clean1 === clean2 && clean1.length > 8) {
+            return { isMatch: true, score: 100, type: 'Exact Match' };
+        }
+        return { isMatch: false, score: 0 };
+    }
+
+    const set1 = new Set(t1);
+    const set2 = new Set(t2);
+    let intersection = 0;
+    set1.forEach(t => { if (set2.has(t)) intersection++; });
+
+    const dice = Math.round(((2 * intersection) / (set1.size + set2.size)) * 100);
+    const jaccard = Math.round((intersection / (new Set([...t1, ...t2]).size)) * 100);
+    const score = Math.max(dice, jaccard);
+
+    // Require at least 80% genuine content overlap to flag as duplicate
+    if (score >= 80) {
+        return { isMatch: true, score, type: score >= 95 ? 'Exact Match' : `${score}% Content Match` };
+    }
+    return { isMatch: false, score: 0 };
+}
+
 function parseQuestionPaperDocx(filePath) {
     const content = fs.readFileSync(filePath);
     const zip = new PizzaZip(content);
@@ -219,7 +273,7 @@ function parseQuestionPaperDocx(filePath) {
                                  .replace(/&apos;/g, "'")
                                  .replace(/&nbsp;/g, ' ')
                                  .replace(/\s+/g, ' ').trim();
-                if (rText.length > 2) { 
+                if (rText.length > 1) { 
                     boldRuns.push(rText);
                 }
             }
@@ -229,9 +283,33 @@ function parseQuestionPaperDocx(filePath) {
             text: text,
             numId: numId,
             fmt: fmt,
+            ilvl: ilvl,
             boldRuns: boldRuns
         });
     });
+
+    // Option extractor supporting single-line, dual-line, and 4-line option layouts
+    function extractOptions(text) {
+        const opts = {};
+        const optRegex = /(?:^|\s|\()(?:\(?([A-Da-d])[\)\.\:]|\b([A-Da-d])[\.\)])\s*/g;
+        const matches = [];
+        let m;
+        while ((m = optRegex.exec(text)) !== null) {
+            const letter = (m[1] || m[2]).toUpperCase();
+            matches.push({ letter, index: m.index, matchEnd: optRegex.lastIndex });
+        }
+        if (matches.length >= 2) {
+            for (let i = 0; i < matches.length; i++) {
+                const current = matches[i];
+                const next = matches[i + 1];
+                const end = next ? next.index : text.length;
+                opts[current.letter] = text.substring(current.matchEnd, end).trim();
+            }
+        } else if (matches.length === 1) {
+            opts[matches[0].letter] = text.substring(matches[0].matchEnd).trim();
+        }
+        return { opts, firstIndex: matches.length > 0 ? matches[0].index : -1 };
+    }
 
     const questions = [];
     let currentSection = 'A';
@@ -249,85 +327,78 @@ function parseQuestionPaperDocx(filePath) {
             continue;
         }
 
-        const manualMatch = p.match(/^\s*(\d+)[\.\s\)]+(.*)/);
+        // Skip instructions/exam metadata
+        if (p.includes('Instructions to candidates') || p.includes('OMR sheet') || p.includes('Multiple Choice Questions') || p.includes('Duration') || p.includes('Maximum Marks') || p.includes('rough work') || p.includes('MCQ Type Question Paper')) {
+            continue;
+        }
+
+        // Match question start: manual number (e.g. 1., 25), Q.1:) or Word decimal list
+        const manualMatch = p.match(/^\s*(?:Q\.?\s*)?(\d+)[\.\)\:\-]\s*(.*)/i);
         const isDecimalList = pObj.fmt === 'decimal';
         const isQuestion = manualMatch || isDecimalList;
 
         if (isQuestion) {
-            let qNo = null;
-            let qText = p;
+            let qNo = manualMatch ? parseInt(manualMatch[1], 10) : null;
+            let qText = manualMatch ? manualMatch[2].trim() : p;
 
-            if (manualMatch) {
-                qNo = parseInt(manualMatch[1], 10);
-                qText = manualMatch[2].trim();
-            }
-
-            if (questions.length === 0 && qNo === 1 && qText.includes("compulsory")) continue;
-            if (questions.length < 5 && (qText.includes("carry") || qText.includes("marking") || qText.includes("calculator"))) continue;
-
-            let options = null;
+            let collectedOptions = {};
             let boldRunsCombined = [...pObj.boldRuns];
 
-            const inlineOptMatch = qText.match(/(.*?)\bA[\.\s\)]+(.*)\bB[\.\s\)]+(.*)\bC[\.\s\)]+(.*)\bD[\.\s\)]+(.*)/i);
-            if (inlineOptMatch) {
-                options = {
-                    A: inlineOptMatch[2].trim(),
-                    B: inlineOptMatch[3].trim(),
-                    C: inlineOptMatch[4].trim(),
-                    D: inlineOptMatch[5].trim()
-                };
-                qText = inlineOptMatch[1].trim();
-            } else {
-                let tempOptions = {};
-                let foundOptionsCount = 0;
-                let lookAheadIndex = i + 1;
-
-                while (lookAheadIndex < paragraphs.length && foundOptionsCount < 4) {
-                    const nextPObj = paragraphs[lookAheadIndex];
-                    const nextP = nextPObj.text;
-
-                    const nextManualMatch = nextP.match(/^\s*(\d+)[\.\s\)]+/);
-                    const nextIsDecimalList = nextPObj.fmt === 'decimal';
-                    if (nextManualMatch || nextIsDecimalList) {
-                        break;
-                    }
-
-                    boldRunsCombined = boldRunsCombined.concat(nextPObj.boldRuns);
-
-                    const optInlineMatch = nextP.match(/^\s*A[\.\s\)]+(.*)\bB[\.\s\)]+(.*)\bC[\.\s\)]+(.*)\bD[\.\s\)]+(.*)/i);
-                    if (optInlineMatch) {
-                        tempOptions.A = optInlineMatch[1].trim();
-                        tempOptions.B = optInlineMatch[2].trim();
-                        tempOptions.C = optInlineMatch[3].trim();
-                        tempOptions.D = optInlineMatch[4].trim();
-                        foundOptionsCount = 4;
-                    } else {
-                        const optMatch = nextP.match(/^\s*([A-D])[\.\s\)]+(.*)/i);
-                        if (optMatch) {
-                            const optLetter = optMatch[1].toUpperCase();
-                            tempOptions[optLetter] = optMatch[2].trim();
-                            foundOptionsCount++;
-                        } else if (nextPObj.fmt === 'upperLetter' || nextPObj.fmt === 'lowerLetter') {
-                            const letters = ['A', 'B', 'C', 'D'];
-                            const letter = letters[foundOptionsCount];
-                            tempOptions[letter] = nextP;
-                            foundOptionsCount++;
-                        }
-                    }
-                    lookAheadIndex++;
-                }
-
-                if (foundOptionsCount === 4) {
-                    options = tempOptions;
-                    i = lookAheadIndex - 1;
+            // 1. Check if options are attached inside the question text itself
+            const inlineOpts = extractOptions(qText);
+            if (Object.keys(inlineOpts.opts).length >= 2) {
+                collectedOptions = { ...inlineOpts.opts };
+                if (inlineOpts.firstIndex > 0) {
+                    qText = qText.substring(0, inlineOpts.firstIndex).trim();
                 }
             }
 
-            if (options) {
+            // 2. Lookahead into following paragraphs for options
+            let lookAheadIndex = i + 1;
+            while (lookAheadIndex < paragraphs.length && Object.keys(collectedOptions).length < 4) {
+                const nextPObj = paragraphs[lookAheadIndex];
+                const nextP = nextPObj.text;
+
+                // Stop if next paragraph is clearly another question
+                const nextManualMatch = nextP.match(/^\s*(?:Q\.?\s*)?(\d+)[\.\)\:\-]\s*/i);
+                const nextIsDecimal = nextPObj.fmt === 'decimal';
+                if ((nextManualMatch || nextIsDecimal) && Object.keys(collectedOptions).length > 0) {
+                    break;
+                }
+
+                boldRunsCombined = boldRunsCombined.concat(nextPObj.boldRuns);
+
+                const extracted = extractOptions(nextP);
+                if (Object.keys(extracted.opts).length > 0) {
+                    Object.assign(collectedOptions, extracted.opts);
+                } else if (nextPObj.fmt === 'upperLetter' || nextPObj.fmt === 'lowerLetter') {
+                    const letters = ['A', 'B', 'C', 'D'];
+                    const existingCount = Object.keys(collectedOptions).length;
+                    if (existingCount < 4) {
+                        collectedOptions[letters[existingCount]] = nextP;
+                    }
+                } else {
+                    // Continuation of question text before options appear
+                    if (Object.keys(collectedOptions).length === 0) {
+                        qText += ' ' + nextP;
+                    }
+                }
+
+                lookAheadIndex++;
+                if (Object.keys(collectedOptions).length === 4) {
+                    break;
+                }
+            }
+
+            // If we found at least 2 options, treat as a valid question
+            if (Object.keys(collectedOptions).length >= 2) {
+                i = lookAheadIndex - 1;
+
                 let correctOption = null;
                 for (const letter of ['A', 'B', 'C', 'D']) {
-                    if (!options[letter]) continue;
-                    const optText = options[letter].toLowerCase().replace(/[^a-z0-9]/g, '');
+                    if (!collectedOptions[letter]) continue;
+                    const optText = collectedOptions[letter].toLowerCase().replace(/[^a-z0-9]/g, '');
+                    if (!optText) continue;
                     const hasMatch = boldRunsCombined.some(br => {
                         const brClean = br.toLowerCase().replace(/[^a-z0-9]/g, '');
                         return brClean.includes(optText) || optText.includes(brClean);
@@ -347,7 +418,7 @@ function parseQuestionPaperDocx(filePath) {
                     section: currentSection,
                     qNo: qNo,
                     question: qText,
-                    options: options,
+                    options: collectedOptions,
                     answer: correctOption
                 });
             }
@@ -491,22 +562,27 @@ app.post('/api/hod/upload-question-paper', requireAuth(['hod']), upload.single('
                         return res.status(500).json({ error: pqErr.message });
                     }
 
-                    // Strict Duplicate Check
-                    const cleanText = (txt) => (txt || '').toLowerCase().replace(/[^a-z0-9]/g, '').trim();
+                    // Accurate Content-Based Duplicate Check (No False Positives)
                     const matchedDuplicates = [];
 
                     parsedQuestions.forEach(q => {
-                        const qClean = cleanText(q.question);
-                        if (!qClean || qClean.length < 5) return;
+                        if (!q.question || q.question.trim().length < 5) return;
 
-                        const match = (pastQuestions || []).find(pq => {
-                            const pqClean = cleanText(pq.question_text);
-                            return pqClean === qClean || 
-                                   (qClean.length > 25 && pqClean.includes(qClean)) || 
-                                   (pqClean.length > 25 && qClean.includes(pqClean));
+                        let bestMatch = null;
+                        let highestScore = 0;
+
+                        (pastQuestions || []).forEach(pq => {
+                            if (!pq.question_text || pq.question_text.trim().length < 5) return;
+
+                            const sim = computeSimilarity(q.question, pq.question_text);
+                            if (sim.isMatch && sim.score > highestScore) {
+                                highestScore = sim.score;
+                                bestMatch = { pastQ: pq, sim: sim };
+                            }
                         });
 
-                        if (match) {
+                        if (bestMatch) {
+                            const match = bestMatch.pastQ;
                             let sessionName = 'Past Session';
                             let setNameFormatted = match.set_name;
                             if (match.set_name.startsWith('JAN')) {
@@ -525,11 +601,14 @@ app.post('/api/hod/upload-question-paper', requireAuth(['hod']), upload.single('
                                 uploaded_set: setName,
                                 uploaded_q_no: q.qNo,
                                 uploaded_section: q.section,
+                                uploaded_question_text: q.question,
                                 matched_session: sessionName,
                                 matched_set: setNameFormatted,
                                 matched_q_no: match.q_no,
                                 matched_section: match.section,
-                                question_text: q.question
+                                matched_question_text: match.question_text,
+                                similarity_score: bestMatch.sim.score,
+                                match_type: bestMatch.sim.type
                             });
                         }
                     });
@@ -864,21 +943,27 @@ app.post('/api/coordinator/upload-rm-question-paper', requireAuth(['coordinator'
                     return res.status(500).json({ error: pqErr.message });
                 }
 
-                const cleanText = (txt) => (txt || '').toLowerCase().replace(/[^a-z0-9]/g, '').trim();
+                // Accurate Content-Based Duplicate Check (No False Positives)
                 const matchedDuplicates = [];
 
                 parsedQuestions.forEach(q => {
-                    const qClean = cleanText(q.question);
-                    if (!qClean || qClean.length < 5) return;
+                    if (!q.question || q.question.trim().length < 5) return;
 
-                    const match = (pastQuestions || []).find(pq => {
-                        const pqClean = cleanText(pq.question_text);
-                        return pqClean === qClean || 
-                               (qClean.length > 25 && pqClean.includes(qClean)) || 
-                               (pqClean.length > 25 && qClean.includes(pqClean));
+                    let bestMatch = null;
+                    let highestScore = 0;
+
+                    (pastQuestions || []).forEach(pq => {
+                        if (!pq.question_text || pq.question_text.trim().length < 5) return;
+
+                        const sim = computeSimilarity(q.question, pq.question_text);
+                        if (sim.isMatch && sim.score > highestScore) {
+                            highestScore = sim.score;
+                            bestMatch = { pastQ: pq, sim: sim };
+                        }
                     });
 
-                    if (match) {
+                    if (bestMatch) {
+                        const match = bestMatch.pastQ;
                         let sessionName = match.set_name.startsWith('JAN') ? 'January 2026' : (match.set_name.startsWith('JUL') ? 'July 2026' : 'Past Session');
                         let setNameFormatted = match.set_name.replace('JAN_', 'Set ').replace('JUL_', 'Set ');
 
@@ -886,11 +971,14 @@ app.post('/api/coordinator/upload-rm-question-paper', requireAuth(['coordinator'
                             uploaded_set: setName,
                             uploaded_q_no: q.qNo,
                             uploaded_section: q.section,
+                            uploaded_question_text: q.question,
                             matched_session: sessionName,
                             matched_set: setNameFormatted,
                             matched_q_no: match.q_no,
                             matched_section: match.section,
-                            question_text: q.question
+                            matched_question_text: match.question_text,
+                            similarity_score: bestMatch.sim.score,
+                            match_type: bestMatch.sim.type
                         });
                     }
                 });

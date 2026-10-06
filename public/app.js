@@ -706,13 +706,38 @@ function openDuplicateModal(setLetter, data) {
     summaryEl.innerHTML = `Your uploaded document contains <strong>${data.duplicateCount} questions</strong> that match questions from the past two sessions (January 2026 & July 2026). The maximum permitted is <strong>10 questions</strong>.`;
 
     tbody.innerHTML = (data.duplicates || []).map((m, index) => {
+        const scoreVal = m.similarity_score || 100;
+        const scoreBadge = scoreVal >= 95 
+            ? `<span class="badge-tag" style="background:#fee2e2; color:#b91c1c; font-weight:600;"><i class="fa-solid fa-circle-exclamation"></i> 100% Exact</span>`
+            : `<span class="badge-tag" style="background:#fef3c7; color:#b45309; font-weight:600;"><i class="fa-solid fa-triangle-exclamation"></i> ${scoreVal}% Match</span>`;
+
         return `
             <tr>
-                <td><strong>Q.${m.uploaded_q_no}</strong> (Set ${m.uploaded_set})</td>
-                <td><span class="badge-tag" style="background:#e0f2fe; color:#0369a1;">Section ${m.uploaded_section}</span></td>
-                <td>${escapeHtml(m.matched_session)}</td>
-                <td><strong>${escapeHtml(m.matched_set)} &bull; Q.${m.matched_q_no}</strong></td>
-                <td><div style="max-height: 60px; overflow-y: auto; color: #334155; font-size: 0.8rem;">${escapeHtml(m.question_text)}</div></td>
+                <td style="text-align: center;">
+                    <strong>Q.${m.uploaded_q_no}</strong><br>
+                    <span class="badge-tag" style="background:#e0f2fe; color:#0369a1; font-size: 0.7rem;">Sec ${m.uploaded_section}</span>
+                </td>
+                <td>
+                    <div style="max-height: 85px; overflow-y: auto; color: #1e293b; font-size: 0.85rem; line-height: 1.4;">
+                        ${escapeHtml(m.uploaded_question_text || m.question_text)}
+                    </div>
+                </td>
+                <td>
+                    <div style="font-size: 0.82rem; font-weight: 600; color: #4338ca;">
+                        <i class="fa-regular fa-calendar"></i> ${escapeHtml(m.matched_session)}
+                    </div>
+                    <div style="font-size: 0.8rem; color: #475569; margin-top: 2px;">
+                        ${escapeHtml(m.matched_set)} &bull; <strong>Q.${m.matched_q_no}</strong>
+                    </div>
+                </td>
+                <td>
+                    <div style="max-height: 85px; overflow-y: auto; color: #334155; font-size: 0.85rem; line-height: 1.4; background: #f8fafc; padding: 6px; border-radius: 4px; border: 1px solid #e2e8f0;">
+                        ${escapeHtml(m.matched_question_text || '(Reference question in past paper)')}
+                    </div>
+                </td>
+                <td style="text-align: center;">
+                    ${scoreBadge}
+                </td>
             </tr>
         `;
     }).join('');
@@ -731,15 +756,18 @@ function exportDuplicatesCSV() {
         return;
     }
 
-    const headers = ['Uploaded_Set', 'Uploaded_Q_No', 'Section', 'Matched_Session', 'Matched_Set', 'Matched_Q_No', 'Question_Text'];
+    const headers = ['Uploaded_Set', 'Uploaded_Q_No', 'Section', 'Uploaded_Question_Text', 'Matched_Session', 'Matched_Set', 'Matched_Q_No', 'Matched_Question_Text', 'Similarity_Score', 'Match_Type'];
     const rows = state.currentDuplicates.map(d => [
         `"Set ${d.uploaded_set}"`,
         d.uploaded_q_no,
         `"Section ${d.uploaded_section}"`,
+        `"${(d.uploaded_question_text || d.question_text || '').replace(/"/g, '""')}"`,
         `"${d.matched_session}"`,
         `"${d.matched_set}"`,
         d.matched_q_no,
-        `"${(d.question_text || '').replace(/"/g, '""')}"`
+        `"${(d.matched_question_text || '').replace(/"/g, '""')}"`,
+        `"${d.similarity_score || 100}%"`,
+        `"${d.match_type || 'Match'}"`
     ]);
 
     const csvContent = [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
