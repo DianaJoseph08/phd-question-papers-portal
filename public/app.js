@@ -415,9 +415,15 @@ async function loadPastPapers() {
                         </div>
                     </td>
                     <td>${statusBadge}</td>
-                    <td style="text-align: center;">
+                    <td style="text-align: center; white-space: nowrap;">
                         <button type="button" class="btn btn-secondary btn-sm" onclick="downloadFileWithAuth('/api/hod/past-question-papers/download?id=${p.id}', '${escapeHtml(p.file_name)}')">
-                            <i class="fa-solid fa-download"></i> Download (.docx)
+                            <i class="fa-solid fa-download"></i> Download
+                        </button>
+                        <button type="button" class="btn btn-danger btn-sm" onclick="deletePastPaperAction(${p.id}, '${p.set_name}', '${escapeHtml(p.session_name)} ${escapeHtml(p.set_letter)}')" style="margin-left: 4px;">
+                            <i class="fa-solid fa-trash-can"></i> Delete
+                        </button>
+                        <button type="button" class="btn btn-primary btn-sm" onclick="openPastPapersModal()" style="margin-left: 4px;">
+                            <i class="fa-solid fa-arrows-rotate"></i> Replace
                         </button>
                     </td>
                 </tr>
@@ -981,6 +987,11 @@ function renderAdminMatrixTable() {
                 <td>${setAHtml}</td>
                 <td>${setBHtml}</td>
                 <td>${statusBadge}</td>
+                <td style="text-align: center;">
+                    <button type="button" class="btn btn-secondary btn-sm" onclick="openPastPapersModal(${d.dept_id}, ${d.campus_id})" style="background: #f8fafc; color: #1e293b; border: 1px solid #cbd5e1; font-weight: 500; font-size: 0.78rem;" title="Inspect, replace, or delete the 4 baseline question papers for this department">
+                        <i class="fa-solid fa-clock-rotate-left" style="color: #3b82f6;"></i> Past Papers
+                    </button>
+                </td>
             </tr>
         `;
     }).join('');
@@ -992,4 +1003,284 @@ function escapeHtml(text) {
     const div = document.createElement('div');
     div.textContent = text;
     return div.innerHTML;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PAST REFERENCE QUESTION PAPERS MANAGER (MODAL & CRUD)
+// ─────────────────────────────────────────────────────────────────────────────
+
+state.pastManagerDepts = [];
+state.currentPastDeptId = null;
+state.currentPastCampusId = null;
+
+async function openPastPapersModal(deptId = null, campusId = null) {
+    const modal = document.getElementById('past-papers-modal');
+    if (!modal) return;
+
+    modal.style.display = 'flex';
+    const statusMsg = document.getElementById('past-modal-status-msg');
+    if (statusMsg) statusMsg.textContent = '';
+
+    try {
+        if (state.user && state.user.role === 'hod') {
+            // HOD can only manage their own department
+            deptId = state.user.department_id;
+            campusId = state.user.campus_id;
+            const selectEl = document.getElementById('past-dept-select');
+            selectEl.innerHTML = `<option value="${deptId}_${campusId}">${escapeHtml(state.user.department_name || 'My Department')} (${escapeHtml(state.user.campus_name || 'Campus')})</option>`;
+            selectEl.disabled = true;
+            await loadDepartmentPastPapers(deptId, campusId);
+        } else {
+            // Admin: load all departments for dropdown
+            const res = await api('/api/admin/departments/list-detailed');
+            state.pastManagerDepts = res.departments || [];
+
+            const selectEl = document.getElementById('past-dept-select');
+            selectEl.disabled = false;
+
+            // Group by campus
+            const rmpDepts = state.pastManagerDepts.filter(d => d.campus_id === 1);
+            const tryDepts = state.pastManagerDepts.filter(d => d.campus_id === 2);
+
+            let optionsHtml = '';
+            if (rmpDepts.length > 0) {
+                optionsHtml += `<optgroup label="Ramapuram Campus">`;
+                rmpDepts.forEach(d => {
+                    optionsHtml += `<option value="${d.dept_id}_${d.campus_id}">[RMP] ${escapeHtml(d.dept_name)} — ${escapeHtml(d.inst_name)} (${d.past_papers_count}/4 papers)</option>`;
+                });
+                optionsHtml += `</optgroup>`;
+            }
+            if (tryDepts.length > 0) {
+                optionsHtml += `<optgroup label="Trichy Campus">`;
+                tryDepts.forEach(d => {
+                    optionsHtml += `<option value="${d.dept_id}_${d.campus_id}">[TRY] ${escapeHtml(d.dept_name)} — ${escapeHtml(d.inst_name)} (${d.past_papers_count}/4 papers)</option>`;
+                });
+                optionsHtml += `</optgroup>`;
+            }
+
+            selectEl.innerHTML = optionsHtml;
+
+            // If a specific dept was selected, select it; else pick first
+            if (deptId && campusId) {
+                selectEl.value = `${deptId}_${campusId}`;
+            } else if (state.pastManagerDepts.length > 0) {
+                const first = state.pastManagerDepts[0];
+                deptId = first.dept_id;
+                campusId = first.campus_id;
+                selectEl.value = `${deptId}_${campusId}`;
+            }
+
+            if (deptId && campusId) {
+                await loadDepartmentPastPapers(deptId, campusId);
+            }
+        }
+    } catch (e) {
+        showToast('Failed to initialize past papers manager: ' + e.message, 'error');
+    }
+}
+
+function closePastPapersModal() {
+    const modal = document.getElementById('past-papers-modal');
+    if (modal) modal.style.display = 'none';
+}
+
+async function onPastDeptSelectChange(val) {
+    if (!val) return;
+    const parts = val.split('_').map(Number);
+    const deptId = parts[0];
+    const campusId = parts[1];
+    await loadDepartmentPastPapers(deptId, campusId);
+}
+
+async function loadDepartmentPastPapers(deptId, campusId) {
+    state.currentPastDeptId = deptId;
+    state.currentPastCampusId = campusId;
+
+    const container = document.getElementById('past-papers-cards-container');
+    container.innerHTML = `
+        <div style="grid-column: 1 / -1; text-align: center; padding: 2rem; color: #64748b;">
+            <i class="fa-solid fa-spinner fa-spin"></i> Loading reference papers...
+        </div>
+    `;
+
+    try {
+        const res = await api(`/api/admin/departments/${deptId}/past-papers?campusId=${campusId}`);
+        const dept = res.department;
+        const pastPapers = res.pastPapers || [];
+
+        // Update Header Meta
+        const campusBadge = document.getElementById('past-dept-campus-badge');
+        if (campusBadge) campusBadge.textContent = dept.campus_name;
+
+        const activeCount = pastPapers.filter(p => p.is_uploaded).length;
+        const totalQuestions = pastPapers.reduce((sum, p) => sum + (p.question_count || 0), 0);
+        const summaryText = document.getElementById('past-dept-summary-text');
+        if (summaryText) {
+            summaryText.innerHTML = `<strong>${activeCount} of 4</strong> baseline papers active &bull; <strong>${totalQuestions}</strong> MCQs indexed in DB`;
+        }
+
+        renderPastPapersGrid(pastPapers);
+    } catch (e) {
+        container.innerHTML = `
+            <div style="grid-column: 1 / -1; text-align: center; padding: 2rem; color: #ef4444;">
+                <i class="fa-solid fa-triangle-exclamation"></i> Error loading past papers: ${escapeHtml(e.message)}
+            </div>
+        `;
+    }
+}
+
+function renderPastPapersGrid(pastPapers) {
+    const container = document.getElementById('past-papers-cards-container');
+    if (!container) return;
+
+    container.innerHTML = pastPapers.map(slot => {
+        const uploadDate = slot.created_at ? new Date(slot.created_at).toLocaleDateString('en-IN', {
+            day: '2-digit', month: 'short', year: 'numeric'
+        }) : '';
+
+        const statusBadge = slot.is_uploaded
+            ? `<span class="badge-tag" style="background:#dcfce7; color:#15803d; font-size:0.75rem;"><i class="fa-solid fa-circle-check"></i> Indexed (${slot.question_count} MCQs)</span>`
+            : `<span class="badge-tag" style="background:#fee2e2; color:#b91c1c; font-size:0.75rem;"><i class="fa-solid fa-circle-xmark"></i> Not Uploaded / Missing</span>`;
+
+        const detailsHtml = slot.is_uploaded ? `
+            <div style="margin-top: 0.75rem; background: #ffffff; border: 1px solid #e2e8f0; border-radius: 6px; padding: 0.75rem;">
+                <div style="display: flex; align-items: flex-start; gap: 8px;">
+                    <i class="fa-solid fa-file-word" style="color: #2563eb; font-size: 1.4rem; margin-top: 2px;"></i>
+                    <div style="flex: 1; min-width: 0;">
+                        <div style="font-weight: 600; font-size: 0.85rem; color: #0f172a; word-break: break-word;">
+                            ${escapeHtml(slot.file_name)}
+                        </div>
+                        <div style="font-size: 0.75rem; color: #64748b; margin-top: 2px;">
+                            <i class="fa-regular fa-clock"></i> Uploaded: ${uploadDate}
+                        </div>
+                    </div>
+                </div>
+            </div>
+        ` : `
+            <div style="margin-top: 0.75rem; background: #fffbeb; border: 1px dashed #fde68a; border-radius: 6px; padding: 0.75rem; text-align: center;">
+                <span style="font-size: 0.8rem; color: #b45309;">
+                    <i class="fa-solid fa-triangle-exclamation"></i> No reference file uploaded. Duplicate check has no baseline for this set.
+                </span>
+            </div>
+        `;
+
+        const actionsHtml = slot.is_uploaded ? `
+            <div style="display: flex; gap: 6px; margin-top: 1rem; flex-wrap: wrap;">
+                <button type="button" class="btn btn-secondary btn-sm" onclick="downloadFileWithAuth('/api/hod/past-question-papers/download?id=${slot.id}', '${escapeHtml(slot.file_name)}')" style="flex: 1; min-width: 90px;">
+                    <i class="fa-solid fa-download"></i> Download
+                </button>
+                <button type="button" class="btn btn-danger btn-sm" onclick="deletePastPaperAction(${slot.id}, '${slot.set_name}', '${escapeHtml(slot.title)}')" style="flex: 1; min-width: 80px;">
+                    <i class="fa-solid fa-trash-can"></i> Delete
+                </button>
+                <button type="button" class="btn btn-primary btn-sm" onclick="triggerPastPaperFileInput('${slot.set_name}')" style="flex: 1; min-width: 110px;">
+                    <i class="fa-solid fa-arrows-rotate"></i> Replace DOCX
+                </button>
+            </div>
+        ` : `
+            <div style="margin-top: 1rem;">
+                <button type="button" class="btn btn-primary btn-sm" onclick="triggerPastPaperFileInput('${slot.set_name}')" style="width: 100%;">
+                    <i class="fa-solid fa-cloud-arrow-up"></i> Upload DOCX Paper
+                </button>
+            </div>
+        `;
+
+        return `
+            <div class="past-paper-card" style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 1rem; display: flex; flex-direction: column; justify-content: space-between;">
+                <div>
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem; flex-wrap: wrap; gap: 4px;">
+                        <div style="font-weight: 700; font-size: 0.95rem; color: #1e293b;">
+                            <i class="fa-regular fa-calendar-check" style="color: #3b82f6;"></i> ${escapeHtml(slot.title)}
+                        </div>
+                        ${statusBadge}
+                    </div>
+                    ${detailsHtml}
+                </div>
+                ${actionsHtml}
+                <input type="file" id="past-input-${slot.set_name}" accept=".docx" style="display: none;" onchange="handlePastFileInputSelected(event, '${slot.set_name}')">
+            </div>
+        `;
+    }).join('');
+}
+
+function triggerPastPaperFileInput(setName) {
+    const input = document.getElementById(`past-input-${setName}`);
+    if (input) {
+        input.value = '';
+        input.click();
+    }
+}
+
+function handlePastFileInputSelected(e, setName) {
+    if (e.target.files && e.target.files[0]) {
+        uploadPastPaperFile(setName, e.target.files[0]);
+    }
+}
+
+async function uploadPastPaperFile(setName, file) {
+    if (!file.name.toLowerCase().endsWith('.docx')) {
+        showToast('Please upload a valid Microsoft Word document (.docx).', 'error');
+        return;
+    }
+
+    if (!state.currentPastDeptId) {
+        showToast('No department selected.', 'error');
+        return;
+    }
+
+    const deptId = state.currentPastDeptId;
+    const campusId = state.currentPastCampusId;
+
+    const formData = new FormData();
+    formData.append('set_name', setName);
+    formData.append('file', file);
+
+    const statusMsg = document.getElementById('past-modal-status-msg');
+    if (statusMsg) statusMsg.textContent = `Uploading and parsing MCQs for ${setName}...`;
+    showToast(`Parsing and indexing ${setName} DOCX...`, 'info');
+
+    try {
+        const res = await api(`/api/admin/departments/${deptId}/past-paper/upload`, 'POST', formData, true);
+        showToast(res.message || `Uploaded ${setName} successfully!`, 'success');
+        if (statusMsg) statusMsg.textContent = `✓ Saved: ${res.fileName} (${res.questionCount} MCQs indexed)`;
+
+        // Reload modal cards
+        await loadDepartmentPastPapers(deptId, campusId);
+
+        // Also refresh Admin Matrix if in Admin view
+        if (state.currentView === 'view-admin') {
+            await loadAdminMatrix();
+        }
+        // Also refresh HOD table if in HOD view
+        if (state.currentView === 'view-hod') {
+            await loadPastPapers();
+        }
+    } catch (e) {
+        showToast(`Failed to upload ${setName}: ${e.message}`, 'error');
+        if (statusMsg) statusMsg.textContent = `Error: ${e.message}`;
+    }
+}
+
+async function deletePastPaperAction(paperId, setName, title) {
+    if (!confirm(`Are you sure you want to DELETE ${title}?\n\nThis will remove the file and clean up its parsed questions from the database. The duplicate checker will no longer compare against this paper.`)) {
+        return;
+    }
+
+    showToast(`Deleting ${setName}...`, 'info');
+    try {
+        const res = await api(`/api/admin/past-paper/${paperId}`, 'DELETE');
+        showToast(res.message || `${setName} deleted successfully.`, 'success');
+
+        const deptId = state.currentPastDeptId;
+        const campusId = state.currentPastCampusId;
+        await loadDepartmentPastPapers(deptId, campusId);
+
+        if (state.currentView === 'view-admin') {
+            await loadAdminMatrix();
+        }
+        if (state.currentView === 'view-hod') {
+            await loadPastPapers();
+        }
+    } catch (e) {
+        showToast(`Delete failed: ${e.message}`, 'error');
+    }
 }

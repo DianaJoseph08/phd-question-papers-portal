@@ -1194,7 +1194,20 @@ app.get('/api/hod/past-question-papers/download', requireAuth(['hod', 'coordinat
             }
         }
 
-        if (!diskPath) return res.status(404).json({ error: 'File not found on server' });
+        if (!diskPath) {
+            // Fallback to Google Cloud Storage
+            const gcsKey = `past_papers/${path.basename(paper.file_path)}`;
+            return cloudStorage.getBufferFromCloudStorage(gcsKey)
+                .then(buf => {
+                    if (buf) {
+                        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+                        res.setHeader('Content-Disposition', `attachment; filename="${paper.file_name}"`);
+                        return res.send(buf);
+                    }
+                    return res.status(404).json({ error: 'File not found on server or storage bucket' });
+                })
+                .catch(e => res.status(404).json({ error: 'File not found: ' + e.message }));
+        }
         res.download(diskPath, paper.file_name);
     });
 });
@@ -1670,6 +1683,295 @@ app.get('/api/admin/question-papers/export-drive-zip', requireAuth(['admin', 'su
             console.error('Error generating Google Drive ZIP:', zipErr);
             res.status(500).json({ error: 'Failed to generate ZIP: ' + zipErr.message });
         }
+    });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// REFERENCE PAST QUESTION PAPERS MANAGEMENT (ADMIN & HOD)
+// ─────────────────────────────────────────────────────────────────────────────
+
+// List all departments with detailed past paper statistics
+app.get('/api/admin/departments/list-detailed', requireAuth(['admin', 'super_admin']), (req, res) => {
+    const query = `
+        SELECT 
+            d.id as dept_id, 
+            d.name as dept_name, 
+            d.institution_id,
+            i.name as inst_name,
+            c.id as campus_id, 
+            c.name as campus_name,
+            COUNT(DISTINCT qp.id) as past_papers_count,
+            COUNT(q.id) as total_past_questions
+        FROM departments d
+        JOIN institutions i ON d.institution_id = i.id
+        JOIN campuses c ON i.campus_id = c.id
+        LEFT JOIN question_papers qp ON qp.department_id = d.id AND qp.campus_id = c.id AND qp.set_name IN ('JAN_A', 'JAN_B', 'JUL_A', 'JUL_B')
+        LEFT JOIN questions q ON q.question_paper_id = qp.id
+        GROUP BY d.id, c.id
+        ORDER BY c.name, d.name
+    `;
+    db.all(query, [], (err, rows) => {
+        if (err) return res.status(500).json({ error: err.message });
+        res.json({ departments: rows || [] });
+    });
+});
+
+// Get all 4 reference baseline question papers for a specific department
+app.get('/api/admin/departments/:id/past-papers', requireAuth(['admin', 'super_admin', 'hod']), (req, res) => {
+    const deptId = parseInt(req.params.id);
+    let campusId = req.query.campusId ? parseInt(req.query.campusId) : null;
+
+    if (req.user.role === 'hod' && req.user.department_id !== deptId) {
+        return res.status(403).json({ error: 'Access denied: You can only view past papers for your department.' });
+    }
+
+    db.get(`SELECT d.id, d.name as dept_name, d.institution_id, i.name as inst_name, c.id as campus_id, c.name as campus_name
+            FROM departments d
+            JOIN institutions i ON d.institution_id = i.id
+            JOIN campuses c ON i.campus_id = c.id
+            WHERE d.id = ? ${campusId ? 'AND c.id = ?' : ''}`,
+        campusId ? [deptId, campusId] : [deptId],
+        (dErr, deptInfo) => {
+            if (dErr || !deptInfo) return res.status(404).json({ error: 'Department not found' });
+            campusId = deptInfo.campus_id;
+
+            const sql = `
+                SELECT 
+                    qp.id, 
+                    qp.department_id, 
+                    qp.campus_id, 
+                    qp.set_name, 
+                    qp.file_name, 
+                    qp.file_path, 
+                    qp.created_at,
+                    COUNT(q.id) as question_count
+                FROM question_papers qp
+                LEFT JOIN questions q ON qp.id = q.question_paper_id
+                WHERE qp.department_id = ? AND qp.campus_id = ? AND qp.set_name IN ('JAN_A', 'JAN_B', 'JUL_A', 'JUL_B')
+                GROUP BY qp.id
+            `;
+
+            db.all(sql, [deptId, campusId], (err, rows) => {
+                if (err) return res.status(500).json({ error: err.message });
+
+                const slotsDef = [
+                    { set_name: 'JAN_A', session: 'January 2026', set_letter: 'Set A', title: 'January 2026 — Set A' },
+                    { set_name: 'JAN_B', session: 'January 2026', set_letter: 'Set B', title: 'January 2026 — Set B' },
+                    { set_name: 'JUL_A', session: 'July 2026', set_letter: 'Set A', title: 'July 2026 — Set A' },
+                    { set_name: 'JUL_B', session: 'July 2026', set_letter: 'Set B', title: 'July 2026 — Set B' }
+                ];
+
+                const rowMap = {};
+                (rows || []).forEach(r => rowMap[r.set_name] = r);
+
+                const pastPapers = slotsDef.map(slot => {
+                    const existing = rowMap[slot.set_name];
+                    return {
+                        set_name: slot.set_name,
+                        session: slot.session,
+                        set_letter: slot.set_letter,
+                        title: slot.title,
+                        is_uploaded: !!existing,
+                        id: existing ? existing.id : null,
+                        file_name: existing ? existing.file_name : null,
+                        file_path: existing ? existing.file_path : null,
+                        question_count: existing ? existing.question_count : 0,
+                        created_at: existing ? existing.created_at : null
+                    };
+                });
+
+                res.json({ department: deptInfo, pastPapers });
+            });
+        }
+    );
+});
+
+// Upload / Replace a reference baseline question paper for a department
+app.post('/api/admin/departments/:deptId/past-paper/upload', requireAuth(['admin', 'super_admin', 'hod']), upload.single('file'), (req, res) => {
+    if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+    const deptId = parseInt(req.params.deptId);
+    const { set_name } = req.body;
+
+    const validSets = ['JAN_A', 'JAN_B', 'JUL_A', 'JUL_B'];
+    if (!set_name || !validSets.includes(set_name.toUpperCase())) {
+        if (fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+        return res.status(400).json({ error: `Invalid set name. Must be one of: ${validSets.join(', ')}` });
+    }
+    const setName = set_name.toUpperCase();
+
+    if (req.user.role === 'hod' && req.user.department_id !== deptId) {
+        if (fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+        return res.status(403).json({ error: 'Forbidden: HOD can only manage their own department past papers.' });
+    }
+
+    db.get(`SELECT d.id, d.name as dept_name, i.campus_id, c.name as campus_name
+            FROM departments d
+            JOIN institutions i ON d.institution_id = i.id
+            JOIN campuses c ON i.campus_id = c.id
+            WHERE d.id = ?`, [deptId], (dcErr, deptInfo) => {
+        if (dcErr || !deptInfo) {
+            if (fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+            return res.status(404).json({ error: 'Department not found' });
+        }
+
+        const campusId = deptInfo.campus_id;
+        const filename = `past_${deptId}_${campusId}_${setName}.docx`;
+        const destPath = path.join(qpUploadDir, filename);
+
+        try {
+            // Parse MCQs
+            const parsedQuestions = parseQuestionPaperDocx(req.file.path);
+            if (!parsedQuestions || parsedQuestions.length === 0) {
+                if (fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+                return res.status(400).json({ 
+                    error: "Could not parse any MCQs from this question paper. Please ensure the DOCX file contains numbered questions and choices." 
+                });
+            }
+
+            // Save file locally
+            fs.copyFileSync(req.file.path, destPath);
+            if (fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+
+            // Upload to Google Cloud Storage permanent bucket
+            const gcsKey = `past_papers/${filename}`;
+            cloudStorage.saveToCloudStorage(destPath, gcsKey).catch(e => console.warn('[Storage] Past paper GCS upload:', e.message));
+
+            const relativeFilePath = `/uploads/question_papers/${filename}`;
+
+            db.serialize(() => {
+                db.run('BEGIN TRANSACTION');
+
+                // Check if existing paper row exists
+                db.get(`SELECT id FROM question_papers WHERE department_id = ? AND campus_id = ? AND set_name = ?`,
+                    [deptId, campusId, setName], (findErr, existingPaper) => {
+                        if (findErr) {
+                            db.run('ROLLBACK');
+                            return res.status(500).json({ error: findErr.message });
+                        }
+
+                        const afterPaperSaved = (paperId) => {
+                            // Delete old questions
+                            db.run(`DELETE FROM questions WHERE question_paper_id = ?`, [paperId], (delQErr) => {
+                                if (delQErr) {
+                                    db.run('ROLLBACK');
+                                    return res.status(500).json({ error: delQErr.message });
+                                }
+
+                                // Insert new questions
+                                const stmt = db.prepare(`INSERT INTO questions 
+                                    (question_paper_id, section, q_no, question_text, option_a, option_b, option_c, option_d, correct_answer) 
+                                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+
+                                parsedQuestions.forEach(q => {
+                                    stmt.run(paperId, q.section, q.qNo, q.question, q.options.A || '', q.options.B || '', q.options.C || '', q.options.D || '', q.answer || null);
+                                });
+
+                                stmt.finalize((finErr) => {
+                                    if (finErr) {
+                                        db.run('ROLLBACK');
+                                        return res.status(500).json({ error: finErr.message });
+                                    }
+
+                                    db.run('COMMIT', (commitErr) => {
+                                        if (commitErr) return res.status(500).json({ error: commitErr.message });
+                                        res.json({
+                                            success: true,
+                                            message: `Successfully uploaded and indexed ${parsedQuestions.length} MCQs for ${setName}!`,
+                                            paperId: paperId,
+                                            fileName: req.file.originalname,
+                                            questionCount: parsedQuestions.length
+                                        });
+                                    });
+                                });
+                            });
+                        };
+
+                        if (existingPaper) {
+                            db.run(`UPDATE question_papers 
+                                    SET file_name = ?, file_path = ?, uploaded_by = ?, created_at = CURRENT_TIMESTAMP 
+                                    WHERE id = ?`,
+                                [req.file.originalname, relativeFilePath, req.user.id, existingPaper.id],
+                                function(updErr) {
+                                    if (updErr) {
+                                        db.run('ROLLBACK');
+                                        return res.status(500).json({ error: updErr.message });
+                                    }
+                                    afterPaperSaved(existingPaper.id);
+                                }
+                            );
+                        } else {
+                            db.run(`INSERT INTO question_papers 
+                                    (department_id, campus_id, set_name, file_name, file_path, uploaded_by) 
+                                    VALUES (?, ?, ?, ?, ?, ?)`,
+                                [deptId, campusId, setName, req.file.originalname, relativeFilePath, req.user.id],
+                                function(insErr) {
+                                    if (insErr) {
+                                        db.run('ROLLBACK');
+                                        return res.status(500).json({ error: insErr.message });
+                                    }
+                                    afterPaperSaved(this.lastID);
+                                }
+                            );
+                        }
+                    }
+                );
+            });
+        } catch (parseErr) {
+            if (fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+            return res.status(400).json({ error: `DOCX Parsing Error: ${parseErr.message}` });
+        }
+    });
+});
+
+// Delete a reference baseline question paper
+app.delete('/api/admin/past-paper/:id', requireAuth(['admin', 'super_admin', 'hod']), (req, res) => {
+    const id = parseInt(req.params.id);
+    if (!id) return res.status(400).json({ error: 'ID is required' });
+
+    db.get(`SELECT * FROM question_papers WHERE id = ?`, [id], (err, paper) => {
+        if (err) return res.status(500).json({ error: err.message });
+        if (!paper) return res.status(404).json({ error: 'Question paper not found' });
+
+        const validSets = ['JAN_A', 'JAN_B', 'JUL_A', 'JUL_B'];
+        if (!validSets.includes(paper.set_name)) {
+            return res.status(400).json({ error: 'This endpoint only deletes past reference question papers.' });
+        }
+
+        if (req.user.role === 'hod' && paper.department_id !== req.user.department_id) {
+            return res.status(403).json({ error: 'Forbidden: HOD can only manage their own department past papers.' });
+        }
+
+        db.serialize(() => {
+            db.run('BEGIN TRANSACTION');
+            db.run('DELETE FROM questions WHERE question_paper_id = ?', [id], (delQErr) => {
+                if (delQErr) {
+                    db.run('ROLLBACK');
+                    return res.status(500).json({ error: delQErr.message });
+                }
+
+                db.run('DELETE FROM question_papers WHERE id = ?', [id], function(delQpErr) {
+                    if (delQpErr) {
+                        db.run('ROLLBACK');
+                        return res.status(500).json({ error: delQpErr.message });
+                    }
+
+                    db.run('COMMIT', (commitErr) => {
+                        if (commitErr) return res.status(500).json({ error: commitErr.message });
+
+                        if (paper.file_path) {
+                            const diskPath = path.join(__dirname, paper.file_path.replace(/^\//, ''));
+                            if (fs.existsSync(diskPath)) {
+                                try { fs.unlinkSync(diskPath); } catch (e) {}
+                            }
+                            const gcsKey = `past_papers/${path.basename(paper.file_path)}`;
+                            cloudStorage.deleteFromCloudStorage(gcsKey).catch(e => console.warn('[Storage] Past paper GCS delete:', e.message));
+                        }
+
+                        res.json({ success: true, message: `Reference question paper (${paper.set_name}) deleted successfully.` });
+                    });
+                });
+            });
+        });
     });
 });
 

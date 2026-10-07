@@ -1064,3 +1064,30 @@ body {
     border-radius: 9999px;
     border: 1px solid #a7f3d0;
 }
+
+/* Past Reference Papers Modal & Cards Grid */
+.modal-card-large {
+    max-width: 950px;
+    width: 95%;
+}
+
+.past-papers-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 1.25rem;
+}
+
+.past-paper-card {
+    transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.past-paper-card:hover {
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+}
+
+@media (max-width: 768px) {
+    .past-papers-grid {
+        grid-template-columns: 1fr;
+    }
+}
+

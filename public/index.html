@@ -148,8 +148,13 @@
                         <h3><i class="fa-solid fa-clock-rotate-left"></i> Reference Past Question Papers</h3>
                         <p>Past question papers from January 2026 &amp; July 2026 sessions for your department with verified database status.</p>
                     </div>
-                    <div class="status-summary-tag">
-                        <span id="past-papers-summary-count"><i class="fa-solid fa-check-circle"></i> Loading...</span>
+                    <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+                        <div class="status-summary-tag">
+                            <span id="past-papers-summary-count"><i class="fa-solid fa-check-circle"></i> Loading...</span>
+                        </div>
+                        <button type="button" class="btn btn-secondary btn-sm" onclick="openPastPapersModal()" style="font-size: 0.8rem; background: #3b82f6; color: white; border-color: #3b82f6;">
+                            <i class="fa-solid fa-pen-to-square"></i> Manage Reference Papers
+                        </button>
                     </div>
                 </div>
 
@@ -182,7 +187,10 @@
                     <h2>Question Papers Matrix & Export</h2>
                     <p>Overview of January 2027 question paper submissions across all departments and campuses.</p>
                 </div>
-                <div class="admin-actions">
+                <div class="admin-actions" style="display: flex; gap: 10px; flex-wrap: wrap;">
+                    <button type="button" class="btn btn-secondary" onclick="openPastPapersModal()" style="background: #3b82f6; color: white; border-color: #3b82f6;">
+                        <i class="fa-solid fa-clock-rotate-left"></i> Manage Past Reference Papers
+                    </button>
                     <a href="/api/admin/question-papers/export-drive-zip" download class="btn btn-drive-zip">
                         <i class="fa-solid fa-file-zipper"></i> Export All for Google Drive (ZIP)
                     </a>
@@ -232,10 +240,11 @@
                             <th>Set A Status</th>
                             <th>Set B Status</th>
                             <th>Overall Status</th>
+                            <th style="text-align: center;">Reference Baseline</th>
                         </tr>
                     </thead>
                     <tbody id="admin-matrix-tbody">
-                        <tr><td colspan="5" class="text-center">Loading matrix...</td></tr>
+                        <tr><td colspan="6" class="text-center">Loading matrix...</td></tr>
                     </tbody>
                 </table>
             </div>
@@ -419,6 +428,60 @@
             <div class="modal-footer">
                 <button class="btn btn-primary" onclick="closeDuplicateModal()">
                     <i class="fa-solid fa-pen-to-square"></i> Revise Document & Re-upload
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Manage Department Past Reference Papers Modal -->
+    <div id="past-papers-modal" class="modal-overlay" style="display: none;">
+        <div class="modal-card modal-card-large">
+            <div class="modal-header" style="background: linear-gradient(135deg, #1e293b, #0f172a); color: white;">
+                <div class="modal-header-icon" style="background: rgba(59, 130, 246, 0.2); color: #60a5fa;">
+                    <i class="fa-solid fa-clock-rotate-left"></i>
+                </div>
+                <div>
+                    <h3 style="color: white; margin: 0;">Manage Department Past Reference Papers</h3>
+                    <p style="color: #94a3b8; margin: 4px 0 0 0; font-size: 0.85rem;">Delete misplaced papers & upload correct baseline DOCX question papers (Jan 2026 & July 2026 Sets A & B) used in duplicate checks.</p>
+                </div>
+                <button class="btn-close" onclick="closePastPapersModal()" style="color: #94a3b8;">&times;</button>
+            </div>
+
+            <div class="modal-body" style="padding: 1.5rem;">
+                <!-- Department Switcher & Meta -->
+                <div class="dept-selector-box" style="display: flex; gap: 1rem; align-items: center; background: #f8fafc; padding: 1rem; border-radius: 8px; border: 1px solid #e2e8f0; margin-bottom: 1.5rem; flex-wrap: wrap;">
+                    <div style="flex: 1; min-width: 280px;">
+                        <label for="past-dept-select" style="display: block; font-size: 0.82rem; font-weight: 600; color: #475569; margin-bottom: 4px;">
+                            <i class="fa-solid fa-building-columns"></i> SELECT DEPARTMENT TO MANAGE:
+                        </label>
+                        <select id="past-dept-select" class="form-control" onchange="onPastDeptSelectChange(this.value)" style="width: 100%; padding: 0.6rem; font-size: 0.95rem; font-weight: 500; border-radius: 6px; border: 1px solid #cbd5e1;">
+                            <option value="">Loading departments...</option>
+                        </select>
+                    </div>
+                    <div id="past-dept-meta-badge" style="display: flex; flex-direction: column; gap: 4px;">
+                        <span id="past-dept-campus-badge" class="campus-badge" style="background: #e2e8f0; color: #1e293b; align-self: flex-start;">Campus</span>
+                        <span id="past-dept-summary-text" style="font-size: 0.82rem; color: #64748b; font-weight: 500;">0 of 4 papers active</span>
+                    </div>
+                </div>
+
+                <!-- 4 Papers Grid -->
+                <div class="past-papers-grid" id="past-papers-cards-container">
+                    <div style="grid-column: 1 / -1; text-align: center; padding: 2rem; color: #64748b;">
+                        <i class="fa-solid fa-spinner fa-spin"></i> Loading reference papers...
+                    </div>
+                </div>
+
+                <!-- Guidance Note -->
+                <div class="modal-instructions" style="margin-top: 1.5rem;">
+                    <i class="fa-solid fa-circle-info"></i>
+                    <span><strong>Note:</strong> Uploaded DOCX papers are automatically parsed and indexed into the duplicate verification engine. Replacing or deleting a paper immediately updates similarity calculations for all HOD submissions in this department.</span>
+                </div>
+            </div>
+
+            <div class="modal-footer" style="display: flex; justify-content: space-between; align-items: center;">
+                <span id="past-modal-status-msg" style="font-size: 0.85rem; color: #15803d; font-weight: 500;"></span>
+                <button type="button" class="btn btn-secondary" onclick="closePastPapersModal()">
+                    Close
                 </button>
             </div>
         </div>
