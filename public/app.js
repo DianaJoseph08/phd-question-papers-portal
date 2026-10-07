@@ -722,124 +722,255 @@ async function viewAuditReport(paperId, setLetter) {
 }
 
 function openDuplicateModal(setLetter, data, isAuditView = false) {
+    state.currentAuditData = data;
+    state.currentAuditSetLetter = setLetter;
+    state.currentAuditIsView = isAuditView;
     state.currentDuplicates = data.duplicates || [];
+    state.auditViewFilter = (state.currentDuplicates.length > 0) ? 'flagged' : 'all';
+
     const modal = document.getElementById('duplicate-modal');
     const titleEl = document.getElementById('modal-title');
+    const subtitleEl = document.getElementById('modal-subtitle');
     const summaryEl = document.getElementById('modal-summary-text');
-    const tbody = document.getElementById('duplicate-table-body');
+    const alertBox = document.getElementById('modal-alert-box');
+    const flaggedCountEl = document.getElementById('flagged-count');
+    const allQuestionsCountEl = document.getElementById('all-questions-count');
 
-    const totalQuestions = data.totalQuestions || (data.paper ? data.paper.total_questions : 50);
+    const totalQuestions = data.totalQuestions || (data.paper ? data.paper.total_questions : (data.allQuestions ? data.allQuestions.length : 50));
     const recycledCount = data.recycledCount !== undefined ? data.recycledCount : (data.duplicates ? data.duplicates.filter(d => d.category === 'PAST_RECYCLED').length : 0);
     const optionClonesCount = data.optionClonesCount !== undefined ? data.optionClonesCount : (data.duplicates ? data.duplicates.filter(d => (d.match_type || '').includes('Options')).length : 0);
     const internalCount = data.internalCount !== undefined ? data.internalCount : (data.duplicates ? data.duplicates.filter(d => d.category === 'INTERNAL_REPEAT').length : 0);
     const crossSetCount = data.crossSetCount !== undefined ? data.crossSetCount : (data.duplicates ? data.duplicates.filter(d => d.category === 'CROSS_SET').length : 0);
     const duplicateCount = data.duplicateCount !== undefined ? data.duplicateCount : (data.duplicates ? data.duplicates.length : 0);
 
+    if (flaggedCountEl) flaggedCountEl.textContent = duplicateCount;
+    if (allQuestionsCountEl) allQuestionsCountEl.textContent = totalQuestions;
+
     if (isAuditView) {
-        titleEl.textContent = `Question Paper Integrity & Similarity Audit: Set ${setLetter}`;
+        titleEl.textContent = `Question Paper Similarity & Integrity Audit: Set ${setLetter}`;
+        subtitleEl.textContent = `Comprehensive comparison against reference session papers`;
+
         if (duplicateCount === 0) {
-            summaryEl.innerHTML = `<span style="color:#15803d;"><i class="fa-solid fa-circle-check"></i> <strong>Integrity Status: Clean & Original.</strong> No recycled past questions or internal duplicates detected across ${totalQuestions} MCQs.</span>`;
+            alertBox.className = 'alert-box alert-success';
+            summaryEl.innerHTML = `<span style="color:#15803d;"><i class="fa-solid fa-circle-check"></i> <strong>Integrity Verified: Clean & Original.</strong> No recycled past questions or duplicate choices detected across all ${totalQuestions} questions.</span>`;
         } else {
+            alertBox.className = 'alert-box alert-danger';
             summaryEl.innerHTML = `
-                <div style="display:flex; flex-wrap:wrap; gap:12px; margin-top:4px;">
-                    <span class="badge-tag" style="background:#fee2e2; color:#991b1b; padding:4px 10px; font-size:0.85rem;"><i class="fa-solid fa-recycle"></i> ${recycledCount} Recycled from Past Sessions</span>
+                <div style="display:flex; flex-wrap:wrap; gap:10px; margin-top:2px;">
+                    <span class="badge-tag" style="background:#fee2e2; color:#991b1b; padding:4px 10px; font-size:0.85rem;"><i class="fa-solid fa-recycle"></i> ${recycledCount} Recycled Questions</span>
                     <span class="badge-tag" style="background:#ffedd5; color:#9a3412; padding:4px 10px; font-size:0.85rem;"><i class="fa-solid fa-list-check"></i> ${optionClonesCount} Option Clones</span>
-                    <span class="badge-tag" style="background:#f3e8ff; color:#6b21a8; padding:4px 10px; font-size:0.85rem;"><i class="fa-solid fa-arrows-rotate"></i> ${internalCount} Internal Set Repeats</span>
+                    ${internalCount > 0 ? `<span class="badge-tag" style="background:#f3e8ff; color:#6b21a8; padding:4px 10px; font-size:0.85rem;"><i class="fa-solid fa-arrows-rotate"></i> ${internalCount} Internal Repeats</span>` : ''}
                     ${crossSetCount > 0 ? `<span class="badge-tag" style="background:#e0e7ff; color:#3730a3; padding:4px 10px; font-size:0.85rem;"><i class="fa-solid fa-shuffle"></i> ${crossSetCount} Cross-Set Duplicates</span>` : ''}
                 </div>
             `;
         }
     } else {
-        titleEl.textContent = `Upload Rejected: Set ${setLetter} Has ${duplicateCount} Issues Flagged`;
+        titleEl.textContent = `Upload Rejected: Set ${setLetter} Exceeds Duplicate Limit`;
+        subtitleEl.textContent = `Maximum of 10 recycled questions allowed from past sessions.`;
+        alertBox.className = 'alert-box alert-danger';
         summaryEl.innerHTML = `
             Your uploaded question paper was rejected. 
-            <strong>${recycledCount} questions</strong> are recycled from past sessions (limit: ≤ 10), 
+            <strong>${recycledCount} questions</strong> are recycled from past sessions (policy limit: ≤ 10), 
             <strong>${internalCount} questions</strong> are repeated inside the same paper, and 
             <strong>${crossSetCount} questions</strong> repeat across Set A and Set B.
         `;
     }
 
-    if (!data.duplicates || data.duplicates.length === 0) {
+    renderAuditTable();
+    modal.style.display = 'flex';
+}
+
+function setAuditViewFilter(mode) {
+    state.auditViewFilter = mode;
+    const btnFlagged = document.getElementById('btn-filter-flagged');
+    const btnAll = document.getElementById('btn-filter-all');
+
+    if (btnFlagged && btnAll) {
+        if (mode === 'flagged') {
+            btnFlagged.className = 'btn btn-sm btn-primary active';
+            btnAll.className = 'btn btn-sm btn-secondary';
+        } else {
+            btnFlagged.className = 'btn btn-sm btn-secondary';
+            btnAll.className = 'btn btn-sm btn-primary active';
+        }
+    }
+    renderAuditTable();
+}
+
+function renderAuditTable() {
+    const tbody = document.getElementById('duplicate-table-body');
+    if (!tbody || !state.currentAuditData) return;
+
+    const data = state.currentAuditData;
+    const filter = state.auditViewFilter || 'flagged';
+    const totalQuestions = data.totalQuestions || (data.paper ? data.paper.total_questions : 50);
+
+    // Build the list of rows to display based on filter
+    let rowsToRender = [];
+
+    if (filter === 'flagged') {
+        rowsToRender = (data.duplicates || []).map(d => ({
+            isFlagged: true,
+            qNo: d.uploaded_q_no,
+            section: d.uploaded_section,
+            qText: d.uploaded_question_text || d.question_text,
+            options: d.uploaded_options,
+            match: d
+        }));
+    } else {
+        // Show all questions
+        if (data.allQuestions && data.allQuestions.length > 0) {
+            rowsToRender = data.allQuestions.map(q => ({
+                isFlagged: q.is_flagged,
+                qNo: q.q_no,
+                section: q.section,
+                qText: q.question_text,
+                options: q.options,
+                match: q.match
+            }));
+        } else {
+            // Synthesize from duplicates
+            const dupMap = new Map();
+            (data.duplicates || []).forEach(d => dupMap.set(d.uploaded_q_no, d));
+            rowsToRender = (data.duplicates || []).map(d => ({
+                isFlagged: true,
+                qNo: d.uploaded_q_no,
+                section: d.uploaded_section,
+                qText: d.uploaded_question_text || d.question_text,
+                options: d.uploaded_options,
+                match: d
+            }));
+        }
+    }
+
+    if (rowsToRender.length === 0) {
         tbody.innerHTML = `
             <tr>
-                <td colspan="5" style="text-align:center; padding:2rem; color:#16a34a;">
-                    <i class="fa-solid fa-circle-check" style="font-size:2rem; margin-bottom:8px; display:block;"></i>
-                    <strong>All ${totalQuestions} questions are verified original! No duplicate questions found.</strong>
+                <td colspan="3" style="text-align:center; padding:3rem 1.5rem; color:#15803d; background:#f0fdf4;">
+                    <i class="fa-solid fa-circle-check" style="font-size:2.5rem; margin-bottom:12px; display:block;"></i>
+                    <strong style="font-size:1.1rem;">All Questions Verified Original!</strong>
+                    <p style="color:#166534; font-size:0.9rem; margin-top:4px;">No duplicate or recycled questions detected from reference sessions.</p>
                 </td>
             </tr>
         `;
-    } else {
-        tbody.innerHTML = data.duplicates.map((m, index) => {
-            const scoreVal = m.similarity_score || 100;
-            const matchTypeStr = m.match_type || '';
-            let scoreBadge = '';
+        return;
+    }
 
-            if (matchTypeStr.includes('Exact')) {
-                scoreBadge = `<span class="badge-tag" style="background:#fee2e2; color:#b91c1c; font-weight:600;"><i class="fa-solid fa-clone"></i> Exact 100%</span>`;
-            } else if (matchTypeStr.includes('Options') || matchTypeStr.includes('Option')) {
-                scoreBadge = `<span class="badge-tag" style="background:#ffedd5; color:#c2410c; font-weight:600;"><i class="fa-solid fa-list-check"></i> Option Clone (${scoreVal}%)</span>`;
-            } else if (matchTypeStr.includes('Internal')) {
-                scoreBadge = `<span class="badge-tag" style="background:#f3e8ff; color:#7e22ce; font-weight:600;"><i class="fa-solid fa-arrows-rotate"></i> Internal Repeat</span>`;
-            } else if (matchTypeStr.includes('Cross-Set')) {
-                scoreBadge = `<span class="badge-tag" style="background:#e0e7ff; color:#4338ca; font-weight:600;"><i class="fa-solid fa-shuffle"></i> Cross-Set Duplicate</span>`;
-            } else if (matchTypeStr.includes('Numerical')) {
-                scoreBadge = `<span class="badge-tag" style="background:#fef3c7; color:#b45309; font-weight:600;"><i class="fa-solid fa-calculator"></i> Same Numbers (${scoreVal}%)</span>`;
-            } else {
-                scoreBadge = `<span class="badge-tag" style="background:#fef3c7; color:#b45309; font-weight:600;"><i class="fa-solid fa-pen-fancy"></i> Rewritten (${scoreVal}%)</span>`;
-            }
+    tbody.innerHTML = rowsToRender.map(item => {
+        const upOpts = item.options || {};
+        const upOptsHtml = `
+            <div class="options-preview-box">
+                <div class="opt-row"><span class="opt-label">A</span> ${escapeHtml(upOpts.A || '—')}</div>
+                <div class="opt-row"><span class="opt-label">B</span> ${escapeHtml(upOpts.B || '—')}</div>
+                <div class="opt-row"><span class="opt-label">C</span> ${escapeHtml(upOpts.C || '—')}</div>
+                <div class="opt-row"><span class="opt-label">D</span> ${escapeHtml(upOpts.D || '—')}</div>
+            </div>
+        `;
 
-            const upOpts = m.uploaded_options;
-            const upOptsHtml = upOpts ? `
-                <div style="font-size: 0.76rem; color: #64748b; margin-top: 4px; background: #f1f5f9; padding: 4px 6px; border-radius: 4px;">
-                    <strong>(A)</strong> ${escapeHtml(upOpts.A || '')} &bull; <strong>(B)</strong> ${escapeHtml(upOpts.B || '')}<br>
-                    <strong>(C)</strong> ${escapeHtml(upOpts.C || '')} &bull; <strong>(D)</strong> ${escapeHtml(upOpts.D || '')}
-                </div>
-            ` : '';
-
-            const matchOpts = m.matched_options;
-            const matchOptsHtml = matchOpts ? `
-                <div style="font-size: 0.76rem; color: #475569; margin-top: 4px; background: #f8fafc; padding: 4px 6px; border-radius: 4px; border: 1px solid #e2e8f0;">
-                    <strong>(A)</strong> ${escapeHtml(matchOpts.A || '')} &bull; <strong>(B)</strong> ${escapeHtml(matchOpts.B || '')}<br>
-                    <strong>(C)</strong> ${escapeHtml(matchOpts.C || '')} &bull; <strong>(D)</strong> ${escapeHtml(matchOpts.D || '')}
-                </div>
-            ` : '';
-
+        if (!item.isFlagged || !item.match) {
+            // Clean Original Question
             return `
-                <tr>
-                    <td style="text-align: center; vertical-align: top;">
-                        <strong style="font-size:1rem; color:#0f172a;">Q.${m.uploaded_q_no}</strong><br>
-                        <span class="badge-tag" style="background:#e0f2fe; color:#0369a1; font-size: 0.7rem;">Sec ${m.uploaded_section}</span>
-                    </td>
-                    <td style="vertical-align: top;">
-                        <div style="color: #1e293b; font-size: 0.85rem; line-height: 1.4; font-weight: 500;">
-                            ${escapeHtml(m.uploaded_question_text || m.question_text)}
+                <tr style="background:#ffffff;">
+                    <td style="vertical-align:top; padding:0.9rem 1rem; border-bottom:1px solid #e2e8f0;">
+                        <div style="display:flex; align-items:center; gap:8px; margin-bottom:6px;">
+                            <span class="badge-tag" style="background:#0284c7; color:#ffffff; font-weight:700; font-size:0.85rem;">Q.${item.qNo}</span>
+                            <span class="badge-tag" style="background:#e0f2fe; color:#0369a1; font-size:0.75rem;">Sec ${item.section || 'A'}</span>
+                        </div>
+                        <div style="font-size:0.9rem; color:#1e293b; font-weight:600; line-height:1.45; margin-bottom:6px;">
+                            ${escapeHtml(item.qText)}
                         </div>
                         ${upOptsHtml}
                     </td>
-                    <td style="vertical-align: top;">
-                        <div style="font-size: 0.82rem; font-weight: 600; color: #4338ca;">
-                            <i class="fa-regular fa-calendar"></i> ${escapeHtml(m.matched_session)}
-                        </div>
-                        <div style="font-size: 0.8rem; color: #334155; margin-top: 2px;">
-                            ${escapeHtml(m.matched_set)} &bull; <strong>Q.${m.matched_q_no}</strong>
-                        </div>
+                    <td style="text-align:center; vertical-align:middle; padding:0.9rem 0.5rem; border-bottom:1px solid #e2e8f0; background:#f8fafc;">
+                        <span class="badge-tag" style="background:#dcfce7; color:#15803d; font-weight:600; padding:4px 8px; font-size:0.78rem;">
+                            <i class="fa-solid fa-check"></i> Original (0%)
+                        </span>
                     </td>
-                    <td style="vertical-align: top;">
-                        <div style="color: #334155; font-size: 0.85rem; line-height: 1.4; background: #f8fafc; padding: 6px; border-radius: 4px; border: 1px solid #e2e8f0;">
-                            ${escapeHtml(m.matched_question_text || '(Reference question in past paper)')}
-                        </div>
-                        ${matchOptsHtml}
-                        ${m.reason ? `<div style="font-size:0.75rem; color:#dc2626; margin-top:4px; font-weight:500;"><i class="fa-solid fa-triangle-exclamation"></i> ${escapeHtml(m.reason)}</div>` : ''}
-                    </td>
-                    <td style="text-align: center; vertical-align: top;">
-                        ${scoreBadge}
+                    <td style="vertical-align:middle; text-align:center; padding:0.9rem 1rem; border-bottom:1px solid #e2e8f0; color:#94a3b8; font-style:italic; font-size:0.85rem; background:#f8fafc;">
+                        <i class="fa-regular fa-circle-check" style="color:#22c55e; margin-right:4px;"></i> No duplicate found in past papers
                     </td>
                 </tr>
             `;
-        }).join('');
-    }
+        }
 
-    modal.style.display = 'flex';
+        // Flagged Duplicate Question
+        const m = item.match;
+        const scoreVal = m.similarity_score || 100;
+        const matchTypeStr = m.match_type || '';
+
+        let badgeBg = '#fef2f2';
+        let badgeColor = '#b91c1c';
+        let badgeIcon = 'fa-solid fa-triangle-exclamation';
+
+        if (matchTypeStr.includes('Exact')) {
+            badgeBg = '#fee2e2';
+            badgeColor = '#991b1b';
+            badgeIcon = 'fa-solid fa-clone';
+        } else if (matchTypeStr.includes('Options')) {
+            badgeBg = '#ffedd5';
+            badgeColor = '#9a3412';
+            badgeIcon = 'fa-solid fa-list-check';
+        } else if (matchTypeStr.includes('Internal')) {
+            badgeBg = '#f3e8ff';
+            badgeColor = '#6b21a8';
+            badgeIcon = 'fa-solid fa-arrows-rotate';
+        } else if (matchTypeStr.includes('Cross-Set')) {
+            badgeBg = '#e0e7ff';
+            badgeColor = '#3730a3';
+            badgeIcon = 'fa-solid fa-shuffle';
+        }
+
+        const matchOpts = m.matched_options || {};
+        const matchOptsHtml = `
+            <div class="options-preview-box" style="background:#fffbeb; border-color:#fde68a;">
+                <div class="opt-row"><span class="opt-label" style="background:#fef3c7; color:#92400e;">A</span> ${escapeHtml(matchOpts.A || '—')}</div>
+                <div class="opt-row"><span class="opt-label" style="background:#fef3c7; color:#92400e;">B</span> ${escapeHtml(matchOpts.B || '—')}</div>
+                <div class="opt-row"><span class="opt-label" style="background:#fef3c7; color:#92400e;">C</span> ${escapeHtml(matchOpts.C || '—')}</div>
+                <div class="opt-row"><span class="opt-label" style="background:#fef3c7; color:#92400e;">D</span> ${escapeHtml(matchOpts.D || '—')}</div>
+            </div>
+        `;
+
+        return `
+            <tr style="background:#fff7ed;">
+                <td style="vertical-align:top; padding:0.9rem 1rem; border-bottom:1px solid #fed7aa;">
+                    <div style="display:flex; align-items:center; gap:8px; margin-bottom:6px;">
+                        <span class="badge-tag" style="background:#ea580c; color:#ffffff; font-weight:700; font-size:0.85rem;">Q.${item.qNo}</span>
+                        <span class="badge-tag" style="background:#ffedd5; color:#9a3412; font-size:0.75rem;">Sec ${item.section || 'A'}</span>
+                    </div>
+                    <div style="font-size:0.9rem; color:#1e293b; font-weight:600; line-height:1.45; margin-bottom:6px;">
+                        ${escapeHtml(item.qText)}
+                    </div>
+                    ${upOptsHtml}
+                </td>
+                <td style="text-align:center; vertical-align:middle; padding:0.9rem 0.5rem; border-bottom:1px solid #fed7aa; background:#fffbeb;">
+                    <div style="margin-bottom:6px;">
+                        <span class="badge-tag" style="background:${badgeBg}; color:${badgeColor}; font-weight:700; padding:5px 9px; font-size:0.8rem; display:inline-block;">
+                            <i class="${badgeIcon}"></i> ${escapeHtml(matchTypeStr)}
+                        </span>
+                    </div>
+                    <div style="font-size:0.75rem; color:#b45309; font-weight:600;">
+                        ${scoreVal}% Match
+                    </div>
+                    <div style="font-size:0.72rem; color:#64748b; margin-top:6px;">
+                        <i class="fa-solid fa-arrow-right"></i>
+                    </div>
+                </td>
+                <td style="vertical-align:top; padding:0.9rem 1rem; border-bottom:1px solid #fed7aa; background:#fefce8;">
+                    <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:6px;">
+                        <div style="display:flex; align-items:center; gap:6px;">
+                            <span class="badge-tag" style="background:#ca8a04; color:#ffffff; font-weight:700; font-size:0.85rem;">Q.${m.matched_q_no}</span>
+                            <span class="badge-tag" style="background:#fef08a; color:#854d0e; font-size:0.75rem; font-weight:600;">${escapeHtml(m.matched_session)} &bull; ${escapeHtml(m.matched_set)}</span>
+                        </div>
+                    </div>
+                    <div style="font-size:0.9rem; color:#1e293b; font-weight:600; line-height:1.45; margin-bottom:6px;">
+                        ${escapeHtml(m.matched_question_text || '—')}
+                    </div>
+                    ${matchOptsHtml}
+                    ${m.reason ? `<div style="font-size:0.75rem; color:#dc2626; margin-top:6px; font-weight:500;"><i class="fa-solid fa-circle-exclamation"></i> ${escapeHtml(m.reason)}</div>` : ''}
+                </td>
+            </tr>
+        `;
+    }).join('');
 }
 
 function closeDuplicateModal() {

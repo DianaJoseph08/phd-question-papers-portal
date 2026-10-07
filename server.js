@@ -156,6 +156,14 @@ function extractNumbers(text) {
     return text.match(/\b\d+(?:\.\d+)?\b/g) || [];
 }
 
+function getNgrams(tokens, n) {
+    const ngrams = [];
+    for (let i = 0; i <= tokens.length - n; i++) {
+        ngrams.push(tokens.slice(i, i + n).join(' '));
+    }
+    return ngrams;
+}
+
 function computeSetOverlap(tokensA, tokensB) {
     if (!tokensA.length || !tokensB.length) return { jaccard: 0, dice: 0, containment: 0, inter: 0 };
     const sA = new Set(tokensA);
@@ -176,10 +184,11 @@ function computeOptionsSimilarity(optsA, optsB) {
 
     let matched = 0;
     arrA.forEach(a => {
+        if (a.length < 2) return;
         const found = arrB.some(b => {
             if (a === b) return true;
             const sim = computeSetOverlap(a.split(/\s+/), b.split(/\s+/));
-            return sim.dice >= 75 || sim.containment >= 85;
+            return sim.dice >= 80;
         });
         if (found) matched++;
     });
@@ -193,32 +202,11 @@ function evaluateMCQMatch(newQ, pastQ) {
 
     if (!newText || !pastText) return { isMatch: false, score: 0, matchType: 'No Match', severity: 'LOW' };
 
-    const tNewStem = getSignificantTokens(newText);
-    const tPastStem = getSignificantTokens(pastText);
-    const stemOverlap = computeSetOverlap(tNewStem, tPastStem);
-
-    const optsNew = newQ.options || { A: newQ.option_a, B: newQ.option_b, C: newQ.option_c, D: newQ.option_d };
-    const optsPast = pastQ.options || { A: pastQ.option_a, B: pastQ.option_b, C: pastQ.option_c, D: pastQ.option_d };
-    const optScore = computeOptionsSimilarity(optsNew, optsPast);
-
-    const fullNew = getSignificantTokens(newText + ' ' + Object.values(optsNew).filter(Boolean).join(' '));
-    const fullPast = getSignificantTokens(pastText + ' ' + Object.values(optsPast).filter(Boolean).join(' '));
-    const fullOverlap = computeSetOverlap(fullNew, fullPast);
-
     const cleanNew = newText.toLowerCase().replace(/[^a-z0-9]/g, '');
     const cleanPast = pastText.toLowerCase().replace(/[^a-z0-9]/g, '');
     const isExactStem = cleanNew === cleanPast && cleanNew.length > 10;
 
-    const numsNew = extractNumbers(newText);
-    const numsPast = extractNumbers(pastText);
-    let numInter = 0;
-    if (numsNew.length > 0 && numsPast.length > 0) {
-        const sNums = new Set(numsPast);
-        numsNew.forEach(n => { if (sNums.has(n)) numInter++; });
-    }
-    const numMatch = numsPast.length > 0 ? (numInter / numsPast.length) >= 0.75 : false;
-
-    // 1. Exact Verbatim Match
+    // 1. Tier 1: Exact Verbatim Match
     if (isExactStem) {
         return {
             isMatch: true,
@@ -229,61 +217,70 @@ function evaluateMCQMatch(newQ, pastQ) {
         };
     }
 
-    // 2. Recycled Answer Choices (Option Clone)
-    if (optScore >= 75 && (stemOverlap.containment >= 20 || stemOverlap.inter >= 2 || fullOverlap.containment >= 30)) {
+    const optsNew = newQ.options || { A: newQ.option_a, B: newQ.option_b, C: newQ.option_c, D: newQ.option_d };
+    const optsPast = pastQ.options || { A: pastQ.option_a, B: pastQ.option_b, C: pastQ.option_c, D: pastQ.option_d };
+    const optScore = computeOptionsSimilarity(optsNew, optsPast);
+
+    const tNew = getSignificantTokens(newText);
+    const tPast = getSignificantTokens(pastText);
+    const stemOverlap = computeSetOverlap(tNew, tPast);
+
+    const bgNew = getNgrams(tNew, 2);
+    const bgPast = getNgrams(tPast, 2);
+    const bgOverlap = computeSetOverlap(bgNew, bgPast);
+
+    // 2. Tier 2: Recycled Answer Choices (Option Clone >= 75%)
+    if (optScore >= 95) {
         return {
             isMatch: true,
-            score: Math.max(optScore, stemOverlap.dice),
-            matchType: optScore >= 95 ? 'Recycled Options (100% Choices Match)' : `Recycled Options (${optScore}% Match)`,
+            score: 100,
+            matchType: 'Recycled Options (100% Choices Match)',
             severity: 'HIGH',
             reason: 'The 4 answer options were copied directly from a past exam question.'
         };
     }
 
-    // 3. Numerical Clone
-    if (numMatch && numsNew.length >= 2 && (optScore >= 75 || stemOverlap.inter >= 2)) {
+    if (optScore >= 75 && (stemOverlap.dice >= 35 || bgOverlap.dice >= 25)) {
         return {
             isMatch: true,
-            score: 95,
+            score: 85,
+            matchType: 'Recycled Options (3 of 4 Choices Match)',
+            severity: 'HIGH',
+            reason: '3 of 4 answer options match a past exam question with matching subject context.'
+        };
+    }
+
+    // 3. Tier 3: High Question Stem Overlap (Phrase / N-Gram Rephrase >= 75%)
+    if ((stemOverlap.dice >= 75 && bgOverlap.dice >= 60) || stemOverlap.dice >= 80) {
+        return {
+            isMatch: true,
+            score: stemOverlap.dice,
+            matchType: `High Question Overlap (${stemOverlap.dice}%)`,
+            severity: 'HIGH',
+            reason: 'Substantial question phrasing and structure reused from past session.'
+        };
+    }
+
+    // 4. Numerical Problem Clone (Numbers match + stem overlap >= 60%)
+    const numsNew = extractNumbers(newText);
+    const numsPast = extractNumbers(pastText);
+    let numInter = 0;
+    if (numsNew.length > 0 && numsPast.length > 0) {
+        const sNums = new Set(numsPast);
+        numsNew.forEach(n => { if (sNums.has(n)) numInter++; });
+    }
+    const numMatch = numsPast.length > 0 ? (numInter / numsPast.length) >= 0.75 : false;
+    if (numMatch && numsNew.length >= 2 && stemOverlap.dice >= 60) {
+        return {
+            isMatch: true,
+            score: 90,
             matchType: 'Numerical Clone (Same Problem Values)',
             severity: 'HIGH',
             reason: 'Uses identical numerical values, formulas, and parameters as a past question.'
         };
     }
 
-    // 4. Direct Content Overlap
-    if (stemOverlap.dice >= 70 || (stemOverlap.containment >= 80 && stemOverlap.inter >= 3)) {
-        return {
-            isMatch: true,
-            score: Math.max(stemOverlap.dice, stemOverlap.containment),
-            matchType: `Direct Question Overlap (${stemOverlap.dice}%)`,
-            severity: 'HIGH',
-            reason: 'High degree of phrasing and content reuse from past session.'
-        };
-    }
-
-    // 5. Paraphrased / Rewritten Stem (Concept Overlap)
-    if (stemOverlap.containment >= 50 && stemOverlap.inter >= 3) {
-        return {
-            isMatch: true,
-            score: stemOverlap.containment,
-            matchType: `Rewritten Stem / Concept Overlap (${stemOverlap.containment}%)`,
-            severity: 'MEDIUM',
-            reason: 'Paraphrased version of a past question testing the exact same concept.'
-        };
-    }
-
-    // 6. Inverted / Transformed MCQ
-    if (fullOverlap.containment >= 45 && fullOverlap.inter >= 4) {
-        return {
-            isMatch: true,
-            score: fullOverlap.containment,
-            matchType: `Rewritten / Inverted MCQ (${fullOverlap.containment}%)`,
-            severity: 'MEDIUM',
-            reason: 'MCQ components inverted or reworded from a past exam question.'
-        };
-    }
-
+    // Strict No Match: eliminates false positives on coincidental shared words
     return { isMatch: false, score: 0, matchType: 'No Match', severity: 'LOW', reason: '' };
 }
 
@@ -413,8 +410,27 @@ function performDuplicateAudit(parsedQuestions, pastQuestions, currentPaperSetNa
     const internalCount = matchedDuplicates.filter(d => d.category === 'INTERNAL_REPEAT').length;
     const crossSetCount = matchedDuplicates.filter(d => d.category === 'CROSS_SET').length;
 
+    // Full per-question audit map
+    const dupMap = new Map();
+    matchedDuplicates.forEach(d => {
+        dupMap.set(d.uploaded_q_no, d);
+    });
+
+    const allQuestions = parsedQuestions.map(q => {
+        const dup = dupMap.get(q.qNo);
+        return {
+            q_no: q.qNo,
+            section: q.section,
+            question_text: q.question,
+            options: q.options,
+            is_flagged: !!dup,
+            match: dup || null
+        };
+    });
+
     return {
         matchedDuplicates,
+        allQuestions,
         recycledCount,
         optionClonesCount,
         internalCount,
@@ -537,10 +553,10 @@ function parseQuestionPaperDocx(filePath) {
         });
     });
 
-    // Option extractor supporting single-line, dual-line, and 4-line option layouts
+    // Option extractor supporting single-line, glued, dual-line, and 4-line option layouts
     function extractOptions(text) {
         const opts = {};
-        const optRegex = /(?:^|\s|\()(?:\(?([A-Da-d])[\)\.\:]|\b([A-Da-d])[\.\)])\s*/g;
+        const optRegex = /(?:^|\s|\(|:)?(?:([A-Da-d])[\.\)]|\(([A-Da-d])\))\s*/g;
         const matches = [];
         let m;
         while ((m = optRegex.exec(text)) !== null) {
@@ -560,8 +576,14 @@ function parseQuestionPaperDocx(filePath) {
         return { opts, firstIndex: matches.length > 0 ? matches[0].index : -1 };
     }
 
+    const isInstructionOrMetadata = (p) => {
+        return /instructions|omr\s*sheet|multiple\s*choice|four\s*options|negative\s*marking|ballpoint|rough\s*work|calculators?|maximum\s*marks|duration|printed\s*resources|college\s*of|faculty\s*of|subject-specific\s*questions|research\s*methodology\s*questions|equal\s*marks|examination\s*hall|electronic\s*devices|question\s*paper\s*consists/i.test(p)
+            || /^(?:Name|Department|Date|Duration|Signature|Roll\s*No|Reg\s*No|Application\s*No)\s*[:_]/i.test(p);
+    };
+
     const questions = [];
     let currentSection = 'A';
+    let lastValidQNo = 0;
 
     for (let i = 0; i < paragraphs.length; i++) {
         const pObj = paragraphs[i];
@@ -569,31 +591,54 @@ function parseQuestionPaperDocx(filePath) {
 
         if (p.includes('Section A') || p.includes('Research Methodology')) {
             currentSection = 'A';
+            lastValidQNo = 0;
             continue;
         }
         if (p.includes('Section B') || p.includes('Subject-Specific') || p.includes('Subject Specific')) {
             currentSection = 'B';
+            lastValidQNo = 25;
             continue;
         }
 
-        // Skip instructions/exam metadata
-        if (p.includes('Instructions to candidates') || p.includes('OMR sheet') || p.includes('Multiple Choice Questions') || p.includes('Duration') || p.includes('Maximum Marks') || p.includes('rough work') || p.includes('MCQ Type Question Paper')) {
+        if (isInstructionOrMetadata(p)) {
             continue;
         }
 
-        // Match question start: manual number (e.g. 1., 25), Q.1:) or Word decimal list
-        const manualMatch = p.match(/^\s*(?:Q\.?\s*)?(\d+)[\.\)\:\-]\s*(.*)/i);
+        const manualMatch = p.match(/^\s*(?:Q\.?\s*)?(\d+)\s*[\.\)\:\-]\s*(.*)/i);
         const isDecimalList = pObj.fmt === 'decimal';
-        const isQuestion = manualMatch || isDecimalList;
 
-        if (isQuestion) {
-            let qNo = manualMatch ? parseInt(manualMatch[1], 10) : null;
-            let qText = manualMatch ? manualMatch[2].trim() : p;
+        let isValidQuestion = false;
+        let qNo = null;
+        let qText = p;
 
+        if (manualMatch) {
+            const rawNo = parseInt(manualMatch[1], 10);
+            const isFloatingPoint = /^\d+\.\s*\d+/.test(p);
+
+            if (rawNo >= 1 && rawNo <= 50 && !isFloatingPoint) {
+                // In Section B, if number < 20, it's a sub-statement (e.g. "1. Quick condition...")
+                if (currentSection === 'B' && rawNo < 20) {
+                    isValidQuestion = false;
+                } else if (lastValidQNo > 0 && rawNo < lastValidQNo && (lastValidQNo - rawNo) > 3) {
+                    isValidQuestion = false;
+                } else {
+                    isValidQuestion = true;
+                    qNo = rawNo;
+                    qText = manualMatch[2].trim();
+                }
+            }
+        } else if (isDecimalList) {
+            isValidQuestion = true;
+            qNo = lastValidQNo + 1;
+            qText = p;
+        }
+
+        if (isValidQuestion) {
+            lastValidQNo = qNo;
             let collectedOptions = {};
             let boldRunsCombined = [...pObj.boldRuns];
 
-            // 1. Check if options are attached inside the question text itself
+            // 1. Check if options are attached inside question text itself
             const inlineOpts = extractOptions(qText);
             if (Object.keys(inlineOpts.opts).length >= 2) {
                 collectedOptions = { ...inlineOpts.opts };
@@ -602,16 +647,27 @@ function parseQuestionPaperDocx(filePath) {
                 }
             }
 
-            // 2. Lookahead into following paragraphs for options
+            // 2. Lookahead into following paragraphs
             let lookAheadIndex = i + 1;
             while (lookAheadIndex < paragraphs.length && Object.keys(collectedOptions).length < 4) {
                 const nextPObj = paragraphs[lookAheadIndex];
                 const nextP = nextPObj.text;
 
-                // Stop if next paragraph is clearly another question
-                const nextManualMatch = nextP.match(/^\s*(?:Q\.?\s*)?(\d+)[\.\)\:\-]\s*/i);
-                const nextIsDecimal = nextPObj.fmt === 'decimal';
-                if ((nextManualMatch || nextIsDecimal) && Object.keys(collectedOptions).length > 0) {
+                if (isInstructionOrMetadata(nextP)) {
+                    lookAheadIndex++;
+                    continue;
+                }
+
+                const nextManualMatch = nextP.match(/^\s*(?:Q\.?\s*)?(\d+)\s*[\.\)\:\-]\s*/i);
+                if (nextManualMatch) {
+                    const nextRawNo = parseInt(nextManualMatch[1], 10);
+                    const isNextFloat = /^\d+\.\s*\d+/.test(nextP);
+                    const isSubBullet = (currentSection === 'B' && nextRawNo < 20);
+                    if (nextRawNo >= 1 && nextRawNo <= 50 && !isNextFloat && !isSubBullet) {
+                        break;
+                    }
+                }
+                if (nextPObj.fmt === 'decimal' && Object.keys(collectedOptions).length > 0) {
                     break;
                 }
 
@@ -627,9 +683,16 @@ function parseQuestionPaperDocx(filePath) {
                         collectedOptions[letters[existingCount]] = nextP;
                     }
                 } else {
-                    // Continuation of question text before options appear
-                    if (Object.keys(collectedOptions).length === 0) {
-                        qText += ' ' + nextP;
+                    const letters = ['A', 'B', 'C', 'D'];
+                    const existingCount = Object.keys(collectedOptions).length;
+                    if (existingCount > 0 && existingCount < 4) {
+                        collectedOptions[letters[existingCount]] = nextP;
+                    } else if (existingCount === 0) {
+                        if (/^\d+(?:\.\d+)?\s*(?:Kpa|m|cm|%|kg|N|s)?$/i.test(nextP) || nextP.length < 60) {
+                            collectedOptions['A'] = nextP;
+                        } else {
+                            qText += ' ' + nextP;
+                        }
                     }
                 }
 
@@ -639,38 +702,35 @@ function parseQuestionPaperDocx(filePath) {
                 }
             }
 
-            // If we found at least 2 options, treat as a valid question
-            if (Object.keys(collectedOptions).length >= 2) {
-                i = lookAheadIndex - 1;
+            i = lookAheadIndex - 1;
 
-                let correctOption = null;
-                for (const letter of ['A', 'B', 'C', 'D']) {
-                    if (!collectedOptions[letter]) continue;
-                    const optText = collectedOptions[letter].toLowerCase().replace(/[^a-z0-9]/g, '');
-                    if (!optText) continue;
-                    const hasMatch = boldRunsCombined.some(br => {
-                        const brClean = br.toLowerCase().replace(/[^a-z0-9]/g, '');
-                        return brClean.includes(optText) || optText.includes(brClean);
-                    });
-                    if (hasMatch) {
-                        correctOption = letter;
-                        break;
-                    }
-                }
-
-                if (!qNo) {
-                    const sectionQs = questions.filter(q => q.section === currentSection);
-                    qNo = (currentSection === 'A' ? 1 : 26) + sectionQs.length;
-                }
-
-                questions.push({
-                    section: currentSection,
-                    qNo: qNo,
-                    question: qText,
-                    options: collectedOptions,
-                    answer: correctOption
+            let correctOption = null;
+            for (const letter of ['A', 'B', 'C', 'D']) {
+                if (!collectedOptions[letter]) continue;
+                const optText = collectedOptions[letter].toLowerCase().replace(/[^a-z0-9]/g, '');
+                if (!optText) continue;
+                const hasMatch = boldRunsCombined.some(br => {
+                    const brClean = br.toLowerCase().replace(/[^a-z0-9]/g, '');
+                    return brClean.includes(optText) || optText.includes(brClean);
                 });
+                if (hasMatch) {
+                    correctOption = letter;
+                    break;
+                }
             }
+
+            if (!qNo) {
+                const sectionQs = questions.filter(q => q.section === currentSection);
+                qNo = (currentSection === 'A' ? 1 : 26) + sectionQs.length;
+            }
+
+            questions.push({
+                section: currentSection,
+                qNo: qNo,
+                question: qText,
+                options: collectedOptions,
+                answer: correctOption
+            });
         }
     }
     return questions;
@@ -853,7 +913,9 @@ app.post('/api/hod/upload-question-paper', requireAuth(['hod']), upload.single('
                             internalCount: internalCount,
                             crossSetCount: crossSetCount,
                             maxAllowed: 10,
-                            duplicates: matchedDuplicates
+                            totalQuestions: parsedQuestions.length,
+                            duplicates: matchedDuplicates,
+                            allQuestions: audit.allQuestions
                         });
                     }
 
@@ -1093,7 +1155,8 @@ app.get('/api/question-papers/:id/audit-report', requireAuth(['hod', 'coordinato
                         optionClonesCount: audit.optionClonesCount,
                         internalCount: audit.internalCount,
                         crossSetCount: audit.crossSetCount,
-                        duplicates: audit.matchedDuplicates
+                        duplicates: audit.matchedDuplicates,
+                        allQuestions: audit.allQuestions
                     });
                 });
             });

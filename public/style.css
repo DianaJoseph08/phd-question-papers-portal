@@ -1091,3 +1091,54 @@ body {
     }
 }
 
+/* Side-by-Side Question Comparison Table Styles */
+.side-by-side-table th {
+    font-size: 0.85rem;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    background: #f8fafc;
+    border-bottom: 2px solid #e2e8f0;
+}
+
+.options-preview-box {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 4px 10px;
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 6px;
+    padding: 6px 10px;
+    font-size: 0.8rem;
+    color: #334155;
+    margin-top: 6px;
+}
+
+.opt-row {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    line-height: 1.35;
+    word-break: break-word;
+}
+
+.opt-label {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 18px;
+    height: 18px;
+    background: #e2e8f0;
+    color: #475569;
+    border-radius: 50%;
+    font-size: 0.7rem;
+    font-weight: 700;
+    flex-shrink: 0;
+}
+
+.view-filter-buttons .btn.active {
+    background: var(--primary);
+    color: white;
+    border-color: var(--primary);
+}
+
+
