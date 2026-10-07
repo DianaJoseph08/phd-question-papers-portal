@@ -266,6 +266,9 @@ function renderSlot(setLetter) {
                     <button type="button" class="btn btn-secondary btn-sm" onclick="downloadFileWithAuth('/api/question-papers/download/${paper.id}', '${escapeHtml(paper.file_name)}')">
                         <i class="fa-solid fa-download"></i> Download Submitted DOCX
                     </button>
+                    <button type="button" class="btn btn-secondary btn-sm" onclick="viewAuditReport(${paper.id}, '${setLetter}')" style="background: #eef2ff; color: #4338ca; border-color: #c7d2fe;">
+                        <i class="fa-solid fa-magnifying-glass-chart"></i> View Similarity Report
+                    </button>
                     <button class="btn btn-danger btn-sm" onclick="deleteQuestionPaper(${paper.id}, '${setLetter}')">
                         <i class="fa-solid fa-trash-can"></i> Delete & Re-upload
                     </button>
@@ -487,6 +490,9 @@ function renderCoordinatorSlot(setLetter) {
                     <button type="button" class="btn btn-secondary btn-sm" onclick="downloadFileWithAuth('/api/question-papers/download/${paper.id}', '${escapeHtml(paper.file_name)}')">
                         <i class="fa-solid fa-download"></i> Download Submitted DOCX
                     </button>
+                    <button type="button" class="btn btn-secondary btn-sm" onclick="viewAuditReport(${paper.id}, '${setLetter}')" style="background: #eef2ff; color: #4338ca; border-color: #c7d2fe;">
+                        <i class="fa-solid fa-magnifying-glass-chart"></i> View Similarity Report
+                    </button>
                     <button class="btn btn-danger btn-sm" onclick="deleteCoordinatorRmPaper(${paper.id}, '${setLetter}')">
                         <i class="fa-solid fa-trash-can"></i> Delete & Re-upload
                     </button>
@@ -695,52 +701,137 @@ async function loadCoordinatorFacultyStatus() {
 // REJECTION MODAL & COMPARISON TABLE
 // ─────────────────────────────────────────────────────────────────────────────
 
-function openDuplicateModal(setLetter, data) {
+async function viewAuditReport(paperId, setLetter) {
+    showToast(`Generating Similarity & Integrity Audit Report for Set ${setLetter}...`, 'info');
+    try {
+        const res = await apiRequest(`/api/question-papers/${paperId}/audit-report`);
+        if (res && res.success) {
+            openDuplicateModal(setLetter, res, true);
+        } else {
+            showToast(res.error || 'Failed to generate audit report', 'error');
+        }
+    } catch (e) {
+        showToast('Error loading audit report: ' + e.message, 'error');
+    }
+}
+
+function openDuplicateModal(setLetter, data, isAuditView = false) {
     state.currentDuplicates = data.duplicates || [];
     const modal = document.getElementById('duplicate-modal');
     const titleEl = document.getElementById('modal-title');
     const summaryEl = document.getElementById('modal-summary-text');
     const tbody = document.getElementById('duplicate-table-body');
 
-    titleEl.textContent = `Upload Rejected: Set ${setLetter} Has ${data.duplicateCount} Repeated Questions`;
-    summaryEl.innerHTML = `Your uploaded document contains <strong>${data.duplicateCount} questions</strong> that match questions from the past two sessions (January 2026 & July 2026). The maximum permitted is <strong>10 questions</strong>.`;
+    const totalQuestions = data.totalQuestions || (data.paper ? data.paper.total_questions : 50);
+    const recycledCount = data.recycledCount !== undefined ? data.recycledCount : (data.duplicates ? data.duplicates.filter(d => d.category === 'PAST_RECYCLED').length : 0);
+    const optionClonesCount = data.optionClonesCount !== undefined ? data.optionClonesCount : (data.duplicates ? data.duplicates.filter(d => (d.match_type || '').includes('Options')).length : 0);
+    const internalCount = data.internalCount !== undefined ? data.internalCount : (data.duplicates ? data.duplicates.filter(d => d.category === 'INTERNAL_REPEAT').length : 0);
+    const crossSetCount = data.crossSetCount !== undefined ? data.crossSetCount : (data.duplicates ? data.duplicates.filter(d => d.category === 'CROSS_SET').length : 0);
+    const duplicateCount = data.duplicateCount !== undefined ? data.duplicateCount : (data.duplicates ? data.duplicates.length : 0);
 
-    tbody.innerHTML = (data.duplicates || []).map((m, index) => {
-        const scoreVal = m.similarity_score || 100;
-        const scoreBadge = scoreVal >= 95 
-            ? `<span class="badge-tag" style="background:#fee2e2; color:#b91c1c; font-weight:600;"><i class="fa-solid fa-circle-exclamation"></i> 100% Exact</span>`
-            : `<span class="badge-tag" style="background:#fef3c7; color:#b45309; font-weight:600;"><i class="fa-solid fa-triangle-exclamation"></i> ${scoreVal}% Match</span>`;
+    if (isAuditView) {
+        titleEl.textContent = `Question Paper Integrity & Similarity Audit: Set ${setLetter}`;
+        if (duplicateCount === 0) {
+            summaryEl.innerHTML = `<span style="color:#15803d;"><i class="fa-solid fa-circle-check"></i> <strong>Integrity Status: Clean & Original.</strong> No recycled past questions or internal duplicates detected across ${totalQuestions} MCQs.</span>`;
+        } else {
+            summaryEl.innerHTML = `
+                <div style="display:flex; flex-wrap:wrap; gap:12px; margin-top:4px;">
+                    <span class="badge-tag" style="background:#fee2e2; color:#991b1b; padding:4px 10px; font-size:0.85rem;"><i class="fa-solid fa-recycle"></i> ${recycledCount} Recycled from Past Sessions</span>
+                    <span class="badge-tag" style="background:#ffedd5; color:#9a3412; padding:4px 10px; font-size:0.85rem;"><i class="fa-solid fa-list-check"></i> ${optionClonesCount} Option Clones</span>
+                    <span class="badge-tag" style="background:#f3e8ff; color:#6b21a8; padding:4px 10px; font-size:0.85rem;"><i class="fa-solid fa-arrows-rotate"></i> ${internalCount} Internal Set Repeats</span>
+                    ${crossSetCount > 0 ? `<span class="badge-tag" style="background:#e0e7ff; color:#3730a3; padding:4px 10px; font-size:0.85rem;"><i class="fa-solid fa-shuffle"></i> ${crossSetCount} Cross-Set Duplicates</span>` : ''}
+                </div>
+            `;
+        }
+    } else {
+        titleEl.textContent = `Upload Rejected: Set ${setLetter} Has ${duplicateCount} Issues Flagged`;
+        summaryEl.innerHTML = `
+            Your uploaded question paper was rejected. 
+            <strong>${recycledCount} questions</strong> are recycled from past sessions (limit: ≤ 10), 
+            <strong>${internalCount} questions</strong> are repeated inside the same paper, and 
+            <strong>${crossSetCount} questions</strong> repeat across Set A and Set B.
+        `;
+    }
 
-        return `
+    if (!data.duplicates || data.duplicates.length === 0) {
+        tbody.innerHTML = `
             <tr>
-                <td style="text-align: center;">
-                    <strong>Q.${m.uploaded_q_no}</strong><br>
-                    <span class="badge-tag" style="background:#e0f2fe; color:#0369a1; font-size: 0.7rem;">Sec ${m.uploaded_section}</span>
-                </td>
-                <td>
-                    <div style="max-height: 85px; overflow-y: auto; color: #1e293b; font-size: 0.85rem; line-height: 1.4;">
-                        ${escapeHtml(m.uploaded_question_text || m.question_text)}
-                    </div>
-                </td>
-                <td>
-                    <div style="font-size: 0.82rem; font-weight: 600; color: #4338ca;">
-                        <i class="fa-regular fa-calendar"></i> ${escapeHtml(m.matched_session)}
-                    </div>
-                    <div style="font-size: 0.8rem; color: #475569; margin-top: 2px;">
-                        ${escapeHtml(m.matched_set)} &bull; <strong>Q.${m.matched_q_no}</strong>
-                    </div>
-                </td>
-                <td>
-                    <div style="max-height: 85px; overflow-y: auto; color: #334155; font-size: 0.85rem; line-height: 1.4; background: #f8fafc; padding: 6px; border-radius: 4px; border: 1px solid #e2e8f0;">
-                        ${escapeHtml(m.matched_question_text || '(Reference question in past paper)')}
-                    </div>
-                </td>
-                <td style="text-align: center;">
-                    ${scoreBadge}
+                <td colspan="5" style="text-align:center; padding:2rem; color:#16a34a;">
+                    <i class="fa-solid fa-circle-check" style="font-size:2rem; margin-bottom:8px; display:block;"></i>
+                    <strong>All ${totalQuestions} questions are verified original! No duplicate questions found.</strong>
                 </td>
             </tr>
         `;
-    }).join('');
+    } else {
+        tbody.innerHTML = data.duplicates.map((m, index) => {
+            const scoreVal = m.similarity_score || 100;
+            const matchTypeStr = m.match_type || '';
+            let scoreBadge = '';
+
+            if (matchTypeStr.includes('Exact')) {
+                scoreBadge = `<span class="badge-tag" style="background:#fee2e2; color:#b91c1c; font-weight:600;"><i class="fa-solid fa-clone"></i> Exact 100%</span>`;
+            } else if (matchTypeStr.includes('Options') || matchTypeStr.includes('Option')) {
+                scoreBadge = `<span class="badge-tag" style="background:#ffedd5; color:#c2410c; font-weight:600;"><i class="fa-solid fa-list-check"></i> Option Clone (${scoreVal}%)</span>`;
+            } else if (matchTypeStr.includes('Internal')) {
+                scoreBadge = `<span class="badge-tag" style="background:#f3e8ff; color:#7e22ce; font-weight:600;"><i class="fa-solid fa-arrows-rotate"></i> Internal Repeat</span>`;
+            } else if (matchTypeStr.includes('Cross-Set')) {
+                scoreBadge = `<span class="badge-tag" style="background:#e0e7ff; color:#4338ca; font-weight:600;"><i class="fa-solid fa-shuffle"></i> Cross-Set Duplicate</span>`;
+            } else if (matchTypeStr.includes('Numerical')) {
+                scoreBadge = `<span class="badge-tag" style="background:#fef3c7; color:#b45309; font-weight:600;"><i class="fa-solid fa-calculator"></i> Same Numbers (${scoreVal}%)</span>`;
+            } else {
+                scoreBadge = `<span class="badge-tag" style="background:#fef3c7; color:#b45309; font-weight:600;"><i class="fa-solid fa-pen-fancy"></i> Rewritten (${scoreVal}%)</span>`;
+            }
+
+            const upOpts = m.uploaded_options;
+            const upOptsHtml = upOpts ? `
+                <div style="font-size: 0.76rem; color: #64748b; margin-top: 4px; background: #f1f5f9; padding: 4px 6px; border-radius: 4px;">
+                    <strong>(A)</strong> ${escapeHtml(upOpts.A || '')} &bull; <strong>(B)</strong> ${escapeHtml(upOpts.B || '')}<br>
+                    <strong>(C)</strong> ${escapeHtml(upOpts.C || '')} &bull; <strong>(D)</strong> ${escapeHtml(upOpts.D || '')}
+                </div>
+            ` : '';
+
+            const matchOpts = m.matched_options;
+            const matchOptsHtml = matchOpts ? `
+                <div style="font-size: 0.76rem; color: #475569; margin-top: 4px; background: #f8fafc; padding: 4px 6px; border-radius: 4px; border: 1px solid #e2e8f0;">
+                    <strong>(A)</strong> ${escapeHtml(matchOpts.A || '')} &bull; <strong>(B)</strong> ${escapeHtml(matchOpts.B || '')}<br>
+                    <strong>(C)</strong> ${escapeHtml(matchOpts.C || '')} &bull; <strong>(D)</strong> ${escapeHtml(matchOpts.D || '')}
+                </div>
+            ` : '';
+
+            return `
+                <tr>
+                    <td style="text-align: center; vertical-align: top;">
+                        <strong style="font-size:1rem; color:#0f172a;">Q.${m.uploaded_q_no}</strong><br>
+                        <span class="badge-tag" style="background:#e0f2fe; color:#0369a1; font-size: 0.7rem;">Sec ${m.uploaded_section}</span>
+                    </td>
+                    <td style="vertical-align: top;">
+                        <div style="color: #1e293b; font-size: 0.85rem; line-height: 1.4; font-weight: 500;">
+                            ${escapeHtml(m.uploaded_question_text || m.question_text)}
+                        </div>
+                        ${upOptsHtml}
+                    </td>
+                    <td style="vertical-align: top;">
+                        <div style="font-size: 0.82rem; font-weight: 600; color: #4338ca;">
+                            <i class="fa-regular fa-calendar"></i> ${escapeHtml(m.matched_session)}
+                        </div>
+                        <div style="font-size: 0.8rem; color: #334155; margin-top: 2px;">
+                            ${escapeHtml(m.matched_set)} &bull; <strong>Q.${m.matched_q_no}</strong>
+                        </div>
+                    </td>
+                    <td style="vertical-align: top;">
+                        <div style="color: #334155; font-size: 0.85rem; line-height: 1.4; background: #f8fafc; padding: 6px; border-radius: 4px; border: 1px solid #e2e8f0;">
+                            ${escapeHtml(m.matched_question_text || '(Reference question in past paper)')}
+                        </div>
+                        ${matchOptsHtml}
+                        ${m.reason ? `<div style="font-size:0.75rem; color:#dc2626; margin-top:4px; font-weight:500;"><i class="fa-solid fa-triangle-exclamation"></i> ${escapeHtml(m.reason)}</div>` : ''}
+                    </td>
+                    <td style="text-align: center; vertical-align: top;">
+                        ${scoreBadge}
+                    </td>
+                </tr>
+            `;
+        }).join('');
+    }
 
     modal.style.display = 'flex';
 }
@@ -756,29 +847,36 @@ function exportDuplicatesCSV() {
         return;
     }
 
-    const headers = ['Uploaded_Set', 'Uploaded_Q_No', 'Section', 'Uploaded_Question_Text', 'Matched_Session', 'Matched_Set', 'Matched_Q_No', 'Matched_Question_Text', 'Similarity_Score', 'Match_Type'];
-    const rows = state.currentDuplicates.map(d => [
-        `"Set ${d.uploaded_set}"`,
-        d.uploaded_q_no,
-        `"Section ${d.uploaded_section}"`,
-        `"${(d.uploaded_question_text || d.question_text || '').replace(/"/g, '""')}"`,
-        `"${d.matched_session}"`,
-        `"${d.matched_set}"`,
-        d.matched_q_no,
-        `"${(d.matched_question_text || '').replace(/"/g, '""')}"`,
-        `"${d.similarity_score || 100}%"`,
-        `"${d.match_type || 'Match'}"`
-    ]);
+    const headers = ['Uploaded_Set', 'Uploaded_Q_No', 'Section', 'Uploaded_Question_Text', 'Uploaded_Options', 'Matched_Session', 'Matched_Set', 'Matched_Q_No', 'Matched_Question_Text', 'Matched_Options', 'Similarity_Score', 'Match_Type', 'Reason'];
+    const rows = state.currentDuplicates.map(d => {
+        const upOptsStr = d.uploaded_options ? `A: ${d.uploaded_options.A} | B: ${d.uploaded_options.B} | C: ${d.uploaded_options.C} | D: ${d.uploaded_options.D}` : '';
+        const matchOptsStr = d.matched_options ? `A: ${d.matched_options.A} | B: ${d.matched_options.B} | C: ${d.matched_options.C} | D: ${d.matched_options.D}` : '';
+        return [
+            `"Set ${d.uploaded_set}"`,
+            d.uploaded_q_no,
+            `"Section ${d.uploaded_section}"`,
+            `"${(d.uploaded_question_text || d.question_text || '').replace(/"/g, '""')}"`,
+            `"${upOptsStr.replace(/"/g, '""')}"`,
+            `"${d.matched_session}"`,
+            `"${d.matched_set}"`,
+            d.matched_q_no,
+            `"${(d.matched_question_text || '').replace(/"/g, '""')}"`,
+            `"${matchOptsStr.replace(/"/g, '""')}"`,
+            `"${d.similarity_score || 100}%"`,
+            `"${d.match_type || 'Match'}"`,
+            `"${(d.reason || '').replace(/"/g, '""')}"`
+        ];
+    });
 
     const csvContent = [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `Duplicate_Questions_Match_Report_${Date.now()}.csv`;
+    a.download = `Question_Paper_Integrity_Report_${Date.now()}.csv`;
     a.click();
     URL.revokeObjectURL(url);
-    showToast('Match Report exported as CSV', 'success');
+    showToast('Integrity Report exported as CSV', 'success');
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

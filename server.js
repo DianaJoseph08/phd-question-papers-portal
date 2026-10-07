@@ -132,50 +132,295 @@ const STOP_WORDS = new Set([
     'and', 'or', 'by', 'with', 'that', 'this', 'these', 'those', 'how', 'when', 'where', 'why',
     'who', 'not', 'correct', 'incorrect', 'statement', 'statements', 'true', 'false', 'given',
     'below', 'select', 'choose', 'consider', 'identify', 'according', 'type', 'types', 'called',
-    'known', 'as', 'one', 'two', 'three', 'four', 'can', 'be', 'does', 'do', 'has', 'have', 'had'
+    'known', 'as', 'one', 'two', 'three', 'four', 'can', 'be', 'does', 'do', 'has', 'have', 'had',
+    'among', 'listed', 'specifically', 'classified', 'regarding', 'respect', 'terms', 'primarily',
+    'question', 'option', 'each', 'such', 'into', 'both', 'between', 'used', 'using', 'means', 'defined',
+    'stated', 'refer', 'refers', 'give', 'given'
 ]);
+
+function stemToken(t) {
+    return t.replace(/(ing|tion|tions|ed|es|s|ly|al|ic|ment|ments)$/, '');
+}
 
 function getSignificantTokens(text) {
     if (!text) return [];
     return text.toLowerCase()
         .replace(/[^a-z0-9\s]/g, ' ')
         .split(/\s+/)
-        .filter(w => w.length > 2 && !STOP_WORDS.has(w));
+        .filter(w => w.length > 2 && !STOP_WORDS.has(w))
+        .map(stemToken);
 }
 
+function extractNumbers(text) {
+    if (!text) return [];
+    return text.match(/\b\d+(?:\.\d+)?\b/g) || [];
+}
+
+function computeSetOverlap(tokensA, tokensB) {
+    if (!tokensA.length || !tokensB.length) return { jaccard: 0, dice: 0, containment: 0, inter: 0 };
+    const sA = new Set(tokensA);
+    const sB = new Set(tokensB);
+    let inter = 0;
+    sA.forEach(t => { if (sB.has(t)) inter++; });
+    const jaccard = Math.round((inter / new Set([...tokensA, ...tokensB]).size) * 100);
+    const dice = Math.round(((2 * inter) / (sA.size + sB.size)) * 100);
+    const containment = Math.round((inter / Math.min(sA.size, sB.size)) * 100);
+    return { jaccard, dice, containment, inter };
+}
+
+function computeOptionsSimilarity(optsA, optsB) {
+    if (!optsA || !optsB) return 0;
+    const arrA = Object.values(optsA).filter(Boolean).map(o => o.toLowerCase().replace(/[^a-z0-9]/g, ' ').trim());
+    const arrB = Object.values(optsB).filter(Boolean).map(o => o.toLowerCase().replace(/[^a-z0-9]/g, ' ').trim());
+    if (arrA.length === 0 || arrB.length === 0) return 0;
+
+    let matched = 0;
+    arrA.forEach(a => {
+        const found = arrB.some(b => {
+            if (a === b) return true;
+            const sim = computeSetOverlap(a.split(/\s+/), b.split(/\s+/));
+            return sim.dice >= 75 || sim.containment >= 85;
+        });
+        if (found) matched++;
+    });
+
+    return Math.round((matched / Math.max(arrA.length, arrB.length)) * 100);
+}
+
+function evaluateMCQMatch(newQ, pastQ) {
+    const newText = (newQ.question_text || newQ.question || '').trim();
+    const pastText = (pastQ.question_text || pastQ.question || '').trim();
+
+    if (!newText || !pastText) return { isMatch: false, score: 0, matchType: 'No Match', severity: 'LOW' };
+
+    const tNewStem = getSignificantTokens(newText);
+    const tPastStem = getSignificantTokens(pastText);
+    const stemOverlap = computeSetOverlap(tNewStem, tPastStem);
+
+    const optsNew = newQ.options || { A: newQ.option_a, B: newQ.option_b, C: newQ.option_c, D: newQ.option_d };
+    const optsPast = pastQ.options || { A: pastQ.option_a, B: pastQ.option_b, C: pastQ.option_c, D: pastQ.option_d };
+    const optScore = computeOptionsSimilarity(optsNew, optsPast);
+
+    const fullNew = getSignificantTokens(newText + ' ' + Object.values(optsNew).filter(Boolean).join(' '));
+    const fullPast = getSignificantTokens(pastText + ' ' + Object.values(optsPast).filter(Boolean).join(' '));
+    const fullOverlap = computeSetOverlap(fullNew, fullPast);
+
+    const cleanNew = newText.toLowerCase().replace(/[^a-z0-9]/g, '');
+    const cleanPast = pastText.toLowerCase().replace(/[^a-z0-9]/g, '');
+    const isExactStem = cleanNew === cleanPast && cleanNew.length > 10;
+
+    const numsNew = extractNumbers(newText);
+    const numsPast = extractNumbers(pastText);
+    let numInter = 0;
+    if (numsNew.length > 0 && numsPast.length > 0) {
+        const sNums = new Set(numsPast);
+        numsNew.forEach(n => { if (sNums.has(n)) numInter++; });
+    }
+    const numMatch = numsPast.length > 0 ? (numInter / numsPast.length) >= 0.75 : false;
+
+    // 1. Exact Verbatim Match
+    if (isExactStem) {
+        return {
+            isMatch: true,
+            score: 100,
+            matchType: 'Exact Verbatim Match (100%)',
+            severity: 'HIGH',
+            reason: 'Identical question text to past exam paper.'
+        };
+    }
+
+    // 2. Recycled Answer Choices (Option Clone)
+    if (optScore >= 75 && (stemOverlap.containment >= 20 || stemOverlap.inter >= 2 || fullOverlap.containment >= 30)) {
+        return {
+            isMatch: true,
+            score: Math.max(optScore, stemOverlap.dice),
+            matchType: optScore >= 95 ? 'Recycled Options (100% Choices Match)' : `Recycled Options (${optScore}% Match)`,
+            severity: 'HIGH',
+            reason: 'The 4 answer options were copied directly from a past exam question.'
+        };
+    }
+
+    // 3. Numerical Clone
+    if (numMatch && numsNew.length >= 2 && (optScore >= 75 || stemOverlap.inter >= 2)) {
+        return {
+            isMatch: true,
+            score: 95,
+            matchType: 'Numerical Clone (Same Problem Values)',
+            severity: 'HIGH',
+            reason: 'Uses identical numerical values, formulas, and parameters as a past question.'
+        };
+    }
+
+    // 4. Direct Content Overlap
+    if (stemOverlap.dice >= 70 || (stemOverlap.containment >= 80 && stemOverlap.inter >= 3)) {
+        return {
+            isMatch: true,
+            score: Math.max(stemOverlap.dice, stemOverlap.containment),
+            matchType: `Direct Question Overlap (${stemOverlap.dice}%)`,
+            severity: 'HIGH',
+            reason: 'High degree of phrasing and content reuse from past session.'
+        };
+    }
+
+    // 5. Paraphrased / Rewritten Stem (Concept Overlap)
+    if (stemOverlap.containment >= 50 && stemOverlap.inter >= 3) {
+        return {
+            isMatch: true,
+            score: stemOverlap.containment,
+            matchType: `Rewritten Stem / Concept Overlap (${stemOverlap.containment}%)`,
+            severity: 'MEDIUM',
+            reason: 'Paraphrased version of a past question testing the exact same concept.'
+        };
+    }
+
+    // 6. Inverted / Transformed MCQ
+    if (fullOverlap.containment >= 45 && fullOverlap.inter >= 4) {
+        return {
+            isMatch: true,
+            score: fullOverlap.containment,
+            matchType: `Rewritten / Inverted MCQ (${fullOverlap.containment}%)`,
+            severity: 'MEDIUM',
+            reason: 'MCQ components inverted or reworded from a past exam question.'
+        };
+    }
+
+    return { isMatch: false, score: 0, matchType: 'No Match', severity: 'LOW', reason: '' };
+}
+
+// Backward-compatible alias
 function computeSimilarity(q1Text, q2Text) {
-    const clean1 = (q1Text || '').toLowerCase().replace(/[^a-z0-9]/g, '');
-    const clean2 = (q2Text || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    const res = evaluateMCQMatch({ question: q1Text }, { question_text: q2Text });
+    return { isMatch: res.isMatch, score: res.score, type: res.matchType };
+}
 
-    if (!clean1 || !clean2) return { isMatch: false, score: 0 };
-    if (clean1 === clean2 && clean1.length > 10) {
-        return { isMatch: true, score: 100, type: 'Exact Match' };
-    }
+// ─────────────────────────────────────────────────────────────────────────────
+// COMPREHENSIVE QUESTION PAPER AUDIT ENGINE
+// ─────────────────────────────────────────────────────────────────────────────
 
-    const t1 = getSignificantTokens(q1Text);
-    const t2 = getSignificantTokens(q2Text);
+function performDuplicateAudit(parsedQuestions, pastQuestions, currentPaperSetName, oppositeSetQuestions = [], commonRmDeptId = null) {
+    const matchedDuplicates = [];
 
-    if (t1.length < 3 || t2.length < 3) {
-        if (clean1 === clean2 && clean1.length > 8) {
-            return { isMatch: true, score: 100, type: 'Exact Match' };
+    // 1. Internal Repetition Check (Repeated questions within the same uploaded paper)
+    for (let i = 0; i < parsedQuestions.length; i++) {
+        for (let j = i + 1; j < parsedQuestions.length; j++) {
+            const internalMatch = evaluateMCQMatch(parsedQuestions[i], parsedQuestions[j]);
+            if (internalMatch.isMatch && internalMatch.score >= 50) {
+                matchedDuplicates.push({
+                    category: 'INTERNAL_REPEAT',
+                    uploaded_set: currentPaperSetName,
+                    uploaded_q_no: parsedQuestions[j].qNo,
+                    uploaded_section: parsedQuestions[j].section,
+                    uploaded_question_text: parsedQuestions[j].question,
+                    uploaded_options: parsedQuestions[j].options,
+                    matched_session: 'Current Paper',
+                    matched_set: `Set ${currentPaperSetName}`,
+                    matched_q_no: parsedQuestions[i].qNo,
+                    matched_section: parsedQuestions[i].section,
+                    matched_question_text: parsedQuestions[i].question,
+                    matched_options: parsedQuestions[i].options,
+                    similarity_score: internalMatch.score,
+                    match_type: `Internal Duplicate (Repeats Q${parsedQuestions[i].qNo} in this paper)`,
+                    severity: 'HIGH',
+                    reason: `Repeats Question ${parsedQuestions[i].qNo} in the same question paper.`
+                });
+            }
         }
-        return { isMatch: false, score: 0 };
     }
 
-    const set1 = new Set(t1);
-    const set2 = new Set(t2);
-    let intersection = 0;
-    set1.forEach(t => { if (set2.has(t)) intersection++; });
+    // 2. Cross-Set Duplication Check (Repeats between Set A and Set B of Jan 2027)
+    (oppositeSetQuestions || []).forEach(oppQ => {
+        parsedQuestions.forEach(q => {
+            const crossMatch = evaluateMCQMatch(q, oppQ);
+            if (crossMatch.isMatch && crossMatch.score >= 50) {
+                matchedDuplicates.push({
+                    category: 'CROSS_SET',
+                    uploaded_set: currentPaperSetName,
+                    uploaded_q_no: q.qNo,
+                    uploaded_section: q.section,
+                    uploaded_question_text: q.question,
+                    uploaded_options: q.options,
+                    matched_session: 'January 2027',
+                    matched_set: `Set ${oppQ.set_name}`,
+                    matched_q_no: oppQ.q_no,
+                    matched_section: oppQ.section,
+                    matched_question_text: oppQ.question_text,
+                    matched_options: { A: oppQ.option_a, B: oppQ.option_b, C: oppQ.option_c, D: oppQ.option_d },
+                    similarity_score: crossMatch.score,
+                    match_type: `Cross-Set Duplicate (Repeats Set ${oppQ.set_name} Q${oppQ.q_no})`,
+                    severity: 'HIGH',
+                    reason: `Question repeats content from Set ${oppQ.set_name} Q${oppQ.q_no}.`
+                });
+            }
+        });
+    });
 
-    const dice = Math.round(((2 * intersection) / (set1.size + set2.size)) * 100);
-    const jaccard = Math.round((intersection / (new Set([...t1, ...t2]).size)) * 100);
-    const score = Math.max(dice, jaccard);
+    // 3. Past Sessions Recycled Questions Check (Jan 2026, July 2026, Common RM)
+    parsedQuestions.forEach(q => {
+        if (!q.question || q.question.trim().length < 5) return;
 
-    // Require at least 80% genuine content overlap to flag as duplicate
-    if (score >= 80) {
-        return { isMatch: true, score, type: score >= 95 ? 'Exact Match' : `${score}% Content Match` };
-    }
-    return { isMatch: false, score: 0 };
+        let bestMatch = null;
+        let highestScore = 0;
+
+        (pastQuestions || []).forEach(pq => {
+            if (!pq.question_text || pq.question_text.trim().length < 5) return;
+
+            const sim = evaluateMCQMatch(q, pq);
+            if (sim.isMatch && sim.score > highestScore) {
+                highestScore = sim.score;
+                bestMatch = { pastQ: pq, sim: sim };
+            }
+        });
+
+        if (bestMatch) {
+            const match = bestMatch.pastQ;
+            let sessionName = 'Past Session';
+            let setNameFormatted = match.set_name;
+            if (match.set_name.startsWith('JAN')) {
+                sessionName = 'January 2026';
+                setNameFormatted = match.set_name.replace('JAN_', 'Set ');
+            } else if (match.set_name.startsWith('JUL')) {
+                sessionName = 'July 2026';
+                setNameFormatted = match.set_name.replace('JUL_', 'Set ');
+            }
+
+            if (commonRmDeptId && match.department_id === commonRmDeptId) {
+                setNameFormatted += ' (Common RM)';
+            }
+
+            matchedDuplicates.push({
+                category: 'PAST_RECYCLED',
+                uploaded_set: currentPaperSetName,
+                uploaded_q_no: q.qNo,
+                uploaded_section: q.section,
+                uploaded_question_text: q.question,
+                uploaded_options: q.options,
+                matched_session: sessionName,
+                matched_set: setNameFormatted,
+                matched_q_no: match.q_no,
+                matched_section: match.section,
+                matched_question_text: match.question_text,
+                matched_options: { A: match.option_a, B: match.option_b, C: match.option_c, D: match.option_d },
+                similarity_score: bestMatch.sim.score,
+                match_type: bestMatch.sim.matchType,
+                severity: bestMatch.sim.severity,
+                reason: bestMatch.sim.reason
+            });
+        }
+    });
+
+    const recycledCount = matchedDuplicates.filter(d => d.category === 'PAST_RECYCLED').length;
+    const optionClonesCount = matchedDuplicates.filter(d => d.match_type && d.match_type.includes('Recycled Options')).length;
+    const internalCount = matchedDuplicates.filter(d => d.category === 'INTERNAL_REPEAT').length;
+    const crossSetCount = matchedDuplicates.filter(d => d.category === 'CROSS_SET').length;
+
+    return {
+        matchedDuplicates,
+        recycledCount,
+        optionClonesCount,
+        internalCount,
+        crossSetCount,
+        duplicateCount: matchedDuplicates.length
+    };
 }
 
 function parseQuestionPaperDocx(filePath) {
@@ -552,7 +797,8 @@ app.post('/api/hod/upload-question-paper', requireAuth(['hod']), upload.single('
             const isEtFaculty = user.institution_id === 1 || user.institution_id === 5;
 
             let pqSql = `
-                SELECT q.q_no, q.section, q.question_text, qp.set_name, qp.file_name, qp.department_id 
+                SELECT q.q_no, q.section, q.question_text, q.option_a, q.option_b, q.option_c, q.option_d, q.correct_answer,
+                       qp.set_name, qp.file_name, qp.department_id 
                 FROM questions q 
                 JOIN question_papers qp ON q.question_paper_id = qp.id 
                 JOIN departments d ON qp.department_id = d.id 
@@ -560,71 +806,52 @@ app.post('/api/hod/upload-question-paper', requireAuth(['hod']), upload.single('
                   AND qp.set_name NOT IN ('A', 'B')
             `;
 
+            // Also fetch opposite set from current session to check cross-set repeats
+            const oppSetName = (setName === 'A') ? 'B' : 'A';
+            let oppSql = `
+                SELECT q.q_no, q.section, q.question_text, q.option_a, q.option_b, q.option_c, q.option_d, q.correct_answer,
+                       qp.set_name, qp.file_name, qp.department_id
+                FROM questions q
+                JOIN question_papers qp ON q.question_paper_id = qp.id
+                WHERE qp.department_id = ? AND qp.campus_id = ? AND qp.set_name = ?
+            `;
+
             db.all(pqSql, [deptId], (pqErr, pastQuestions) => {
-                    if (pqErr) {
+                if (pqErr) {
+                    if (fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+                    return res.status(500).json({ error: pqErr.message });
+                }
+
+                db.all(oppSql, [deptId, campusId, oppSetName], (oppErr, oppQuestions) => {
+                    const audit = performDuplicateAudit(parsedQuestions, pastQuestions, setName, oppQuestions || [], commonRmDeptId);
+                    const matchedDuplicates = audit.matchedDuplicates;
+                    const duplicateCount = audit.duplicateCount;
+                    const recycledCount = audit.recycledCount;
+                    const internalCount = audit.internalCount;
+                    const crossSetCount = audit.crossSetCount;
+
+                    // Rejection Policy:
+                    // 1. Recycled from past sessions > 10 (exceeds 10 question limit)
+                    // 2. OR internal duplicates > 0 (setter repeated questions inside their own paper)
+                    // 3. OR cross-set repeats > 0 (repeated across Set A and Set B)
+                    if (recycledCount > 10 || internalCount > 0 || crossSetCount > 0) {
                         if (fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
-                        return res.status(500).json({ error: pqErr.message });
-                    }
-
-                    // Accurate Content-Based Duplicate Check (No False Positives)
-                    const matchedDuplicates = [];
-
-                    parsedQuestions.forEach(q => {
-                        if (!q.question || q.question.trim().length < 5) return;
-
-                        let bestMatch = null;
-                        let highestScore = 0;
-
-                        (pastQuestions || []).forEach(pq => {
-                            if (!pq.question_text || pq.question_text.trim().length < 5) return;
-
-                            const sim = computeSimilarity(q.question, pq.question_text);
-                            if (sim.isMatch && sim.score > highestScore) {
-                                highestScore = sim.score;
-                                bestMatch = { pastQ: pq, sim: sim };
-                            }
-                        });
-
-                        if (bestMatch) {
-                            const match = bestMatch.pastQ;
-                            let sessionName = 'Past Session';
-                            let setNameFormatted = match.set_name;
-                            if (match.set_name.startsWith('JAN')) {
-                                sessionName = 'January 2026';
-                                setNameFormatted = match.set_name.replace('JAN_', 'Set ');
-                            } else if (match.set_name.startsWith('JUL')) {
-                                sessionName = 'July 2026';
-                                setNameFormatted = match.set_name.replace('JUL_', 'Set ');
-                            }
-
-                            if (match.department_id === commonRmDeptId) {
-                                setNameFormatted += ' (Common RM)';
-                            }
-
-                            matchedDuplicates.push({
-                                uploaded_set: setName,
-                                uploaded_q_no: q.qNo,
-                                uploaded_section: q.section,
-                                uploaded_question_text: q.question,
-                                matched_session: sessionName,
-                                matched_set: setNameFormatted,
-                                matched_q_no: match.q_no,
-                                matched_section: match.section,
-                                matched_question_text: match.question_text,
-                                similarity_score: bestMatch.sim.score,
-                                match_type: bestMatch.sim.type
-                            });
+                        const reasons = [];
+                        if (recycledCount > 10) {
+                            reasons.push(`${recycledCount} questions recycled from past sessions (January/July 2026), exceeding the limit of 10`);
                         }
-                    });
-
-                    const duplicateCount = matchedDuplicates.length;
-
-                    // If duplicate questions > 10: REJECT UPLOAD with full comparison table data
-                    if (duplicateCount > 10) {
-                        if (fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+                        if (internalCount > 0) {
+                            reasons.push(`${internalCount} internal duplicate question(s) repeated inside this same paper`);
+                        }
+                        if (crossSetCount > 0) {
+                            reasons.push(`${crossSetCount} question(s) repeated across Set A and Set B`);
+                        }
                         return res.status(400).json({ 
-                            error: `Upload rejected: Too many repeated questions. You have used ${duplicateCount} questions from the past two sessions (January/July 2026). A maximum of 10 repeated questions is allowed.`,
+                            error: `Upload rejected: ${reasons.join('; ')}.`,
                             duplicateCount: duplicateCount,
+                            recycledCount: recycledCount,
+                            internalCount: internalCount,
+                            crossSetCount: crossSetCount,
                             maxAllowed: 10,
                             duplicates: matchedDuplicates
                         });
@@ -710,6 +937,7 @@ app.post('/api/hod/upload-question-paper', requireAuth(['hod']), upload.single('
                         );
                     });
                 });
+            });
         } catch (parseErr) {
             if (fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
             return res.status(400).json({ error: `DOCX Parsing Error: ${parseErr.message}` });
@@ -795,6 +1023,81 @@ app.get('/api/question-papers/download/:id', requireAuth(['hod', 'coordinator', 
             return res.status(404).json({ error: 'Physical file not found on server or cloud bucket' });
         }
         res.download(diskPath, paper.file_name);
+    });
+});
+
+// Comprehensive On-Demand Similarity & Integrity Audit Report
+app.get('/api/question-papers/:id/audit-report', requireAuth(['hod', 'coordinator', 'admin', 'super_admin']), (req, res) => {
+    const id = parseInt(req.params.id);
+    if (!id) return res.status(400).json({ error: 'Valid Question Paper ID is required' });
+
+    db.get(`SELECT qp.*, d.name as department_name, c.name as campus_name 
+            FROM question_papers qp
+            JOIN departments d ON qp.department_id = d.id
+            JOIN campuses c ON qp.campus_id = c.id
+            WHERE qp.id = ?`, [id], (err, paper) => {
+        if (err || !paper) return res.status(404).json({ error: 'Question paper not found' });
+
+        db.all(`SELECT q_no, section, question_text, option_a, option_b, option_c, option_d, correct_answer 
+                FROM questions WHERE question_paper_id = ? ORDER BY q_no`, [id], (qErr, currentQuestions) => {
+            if (qErr) return res.status(500).json({ error: qErr.message });
+
+            const formattedCurrent = currentQuestions.map(q => ({
+                qNo: q.q_no,
+                section: q.section,
+                question: q.question_text,
+                options: { A: q.option_a, B: q.option_b, C: q.option_c, D: q.option_d },
+                answer: q.correct_answer
+            }));
+
+            const commonRmDeptId = (paper.campus_id === 1) ? 201 : ((paper.campus_id === 2) ? 202 : null);
+            const isEt = (paper.department_id <= 9 || paper.department_id === 201 || paper.department_id === 202);
+
+            let pqSql = `
+                SELECT q.q_no, q.section, q.question_text, q.option_a, q.option_b, q.option_c, q.option_d, q.correct_answer,
+                       qp.set_name, qp.file_name, qp.department_id
+                FROM questions q
+                JOIN question_papers qp ON q.question_paper_id = qp.id
+                WHERE (qp.department_id = ? ${isEt && commonRmDeptId ? `OR (qp.department_id = ${commonRmDeptId} AND q.section = 'A')` : ''})
+                  AND qp.set_name NOT IN ('A', 'B')
+            `;
+
+            const oppSetName = (paper.set_name === 'A') ? 'B' : 'A';
+            let oppSql = `
+                SELECT q.q_no, q.section, q.question_text, q.option_a, q.option_b, q.option_c, q.option_d, q.correct_answer,
+                       qp.set_name, qp.file_name, qp.department_id
+                FROM questions q
+                JOIN question_papers qp ON q.question_paper_id = qp.id
+                WHERE qp.department_id = ? AND qp.campus_id = ? AND qp.set_name = ?
+            `;
+
+            db.all(pqSql, [paper.department_id], (pqErr, pastQuestions) => {
+                if (pqErr) return res.status(500).json({ error: pqErr.message });
+
+                db.all(oppSql, [paper.department_id, paper.campus_id, oppSetName], (oppErr, oppQuestions) => {
+                    const audit = performDuplicateAudit(formattedCurrent, pastQuestions || [], paper.set_name, oppQuestions || [], commonRmDeptId);
+
+                    res.json({
+                        success: true,
+                        paper: {
+                            id: paper.id,
+                            set_name: paper.set_name,
+                            file_name: paper.file_name,
+                            department_name: paper.department_name,
+                            campus_name: paper.campus_name,
+                            total_questions: currentQuestions.length
+                        },
+                        totalQuestions: currentQuestions.length,
+                        duplicateCount: audit.duplicateCount,
+                        recycledCount: audit.recycledCount,
+                        optionClonesCount: audit.optionClonesCount,
+                        internalCount: audit.internalCount,
+                        crossSetCount: audit.crossSetCount,
+                        duplicates: audit.matchedDuplicates
+                    });
+                });
+            });
+        });
     });
 });
 
@@ -950,7 +1253,8 @@ app.post('/api/coordinator/upload-rm-question-paper', requireAuth(['coordinator'
         }
 
         // Fetch past Common RM questions for duplicate check
-        db.all(`SELECT q.q_no, q.section, q.question_text, qp.set_name, qp.file_name 
+        db.all(`SELECT q.q_no, q.section, q.question_text, q.option_a, q.option_b, q.option_c, q.option_d, q.correct_answer,
+                       qp.set_name, qp.file_name, qp.department_id 
                 FROM questions q 
                 JOIN question_papers qp ON q.question_paper_id = qp.id 
                 WHERE qp.department_id = ? AND qp.set_name NOT IN ('A', 'B')`,
@@ -960,56 +1264,43 @@ app.post('/api/coordinator/upload-rm-question-paper', requireAuth(['coordinator'
                     return res.status(500).json({ error: pqErr.message });
                 }
 
-                // Accurate Content-Based Duplicate Check (No False Positives)
-                const matchedDuplicates = [];
+                const oppSetName = (setName === 'A') ? 'B' : 'A';
+                db.all(`SELECT q.q_no, q.section, q.question_text, q.option_a, q.option_b, q.option_c, q.option_d, q.correct_answer,
+                               qp.set_name, qp.file_name, qp.department_id
+                        FROM questions q
+                        JOIN question_papers qp ON q.question_paper_id = qp.id
+                        WHERE qp.department_id = ? AND qp.campus_id = ? AND qp.set_name = ?`,
+                    [deptId, campusId, oppSetName], (oppErr, oppQuestions) => {
 
-                parsedQuestions.forEach(q => {
-                    if (!q.question || q.question.trim().length < 5) return;
+                    const audit = performDuplicateAudit(parsedQuestions, pastQuestions, setName, oppQuestions || []);
+                    const matchedDuplicates = audit.matchedDuplicates;
+                    const duplicateCount = audit.duplicateCount;
+                    const recycledCount = audit.recycledCount;
+                    const internalCount = audit.internalCount;
+                    const crossSetCount = audit.crossSetCount;
 
-                    let bestMatch = null;
-                    let highestScore = 0;
-
-                    (pastQuestions || []).forEach(pq => {
-                        if (!pq.question_text || pq.question_text.trim().length < 5) return;
-
-                        const sim = computeSimilarity(q.question, pq.question_text);
-                        if (sim.isMatch && sim.score > highestScore) {
-                            highestScore = sim.score;
-                            bestMatch = { pastQ: pq, sim: sim };
+                    if (recycledCount > 10 || internalCount > 0 || crossSetCount > 0) {
+                        if (fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+                        const reasons = [];
+                        if (recycledCount > 10) {
+                            reasons.push(`${recycledCount} questions recycled from past sessions (January/July 2026), exceeding the limit of 10`);
                         }
-                    });
-
-                    if (bestMatch) {
-                        const match = bestMatch.pastQ;
-                        let sessionName = match.set_name.startsWith('JAN') ? 'January 2026' : (match.set_name.startsWith('JUL') ? 'July 2026' : 'Past Session');
-                        let setNameFormatted = match.set_name.replace('JAN_', 'Set ').replace('JUL_', 'Set ');
-
-                        matchedDuplicates.push({
-                            uploaded_set: setName,
-                            uploaded_q_no: q.qNo,
-                            uploaded_section: q.section,
-                            uploaded_question_text: q.question,
-                            matched_session: sessionName,
-                            matched_set: setNameFormatted,
-                            matched_q_no: match.q_no,
-                            matched_section: match.section,
-                            matched_question_text: match.question_text,
-                            similarity_score: bestMatch.sim.score,
-                            match_type: bestMatch.sim.type
+                        if (internalCount > 0) {
+                            reasons.push(`${internalCount} internal duplicate question(s) repeated inside this same paper`);
+                        }
+                        if (crossSetCount > 0) {
+                            reasons.push(`${crossSetCount} question(s) repeated across Set A and Set B`);
+                        }
+                        return res.status(400).json({ 
+                            error: `Upload rejected: ${reasons.join('; ')}.`,
+                            duplicateCount: duplicateCount,
+                            recycledCount: recycledCount,
+                            internalCount: internalCount,
+                            crossSetCount: crossSetCount,
+                            maxAllowed: 10,
+                            duplicates: matchedDuplicates
                         });
                     }
-                });
-
-                const duplicateCount = matchedDuplicates.length;
-                if (duplicateCount > 10) {
-                    if (fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
-                    return res.status(400).json({ 
-                        error: `Upload rejected: Too many repeated questions. You have used ${duplicateCount} questions from the past two sessions (January/July 2026). A maximum of 10 repeated questions is allowed.`,
-                        duplicateCount: duplicateCount,
-                        maxAllowed: 10,
-                        duplicates: matchedDuplicates
-                    });
-                }
 
                 // Save file to organized directory & legacy path
                 fs.copyFileSync(req.file.path, organizedFilePath);
@@ -1086,8 +1377,8 @@ app.post('/api/coordinator/upload-rm-question-paper', requireAuth(['coordinator'
                         }
                     );
                 });
-            }
-        );
+            });
+        });
     } catch (parseErr) {
         if (fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
         return res.status(400).json({ error: `DOCX Parsing Error: ${parseErr.message}` });
