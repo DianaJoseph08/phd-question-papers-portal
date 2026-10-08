@@ -1,0 +1,47 @@
+{
+  "reason": "Set B files uploaded while Set A was selected; confirmed B labels inside the documents.",
+  "records": [
+    {
+      "paper": {
+        "id": "9e12f490-b032-443b-a294-fbe3bf2bed5f",
+        "department_id": 201,
+        "campus_id": 1,
+        "session": "January 2027",
+        "set_name": "A",
+        "kind": "submission",
+        "original_name": "Rmp_All Department _Jan_2027_QP_Set_B.docx",
+        "path": "D:\\Phd_Admissions_Webapp\\PhD_Question_Paper_Workspace\\question-paper-app\\data\\files\\9e12f490-b032-443b-a294-fbe3bf2bed5f.docx",
+        "uploaded_by": 5,
+        "counts": "{\"research\":25,\"subject\":0}",
+        "valid": 1,
+        "reviewed": 0,
+        "created_at": "2026-10-08T07:44:55.129Z"
+      },
+      "screening": {
+        "report": "{\"total_questions\":25,\"matched_count\":0,\"limit\":10,\"rejected\":false,\"matches\":[],\"method\":\"Local exact-question and likely-rephrasing screening; human review is still required.\",\"coverage\":{\"complete\":false,\"checked_papers\":8,\"checked_questions\":188,\"issues\":[{\"campus\":\"Ramapuram\",\"session\":\"January 2026\",\"set\":\"B\",\"reason\":\"Archive extraction is incomplete or uses a different historical format; readable questions were still checked\"},{\"campus\":\"Trichy\",\"session\":\"January 2026\",\"set\":\"A\",\"reason\":\"Archive extraction is incomplete or uses a different historical format; readable questions were still checked\"},{\"campus\":\"Trichy\",\"session\":\"July 2026\",\"set\":\"A\",\"reason\":\"Archive extraction is incomplete or uses a different historical format; readable questions were still checked\"},{\"campus\":\"Trichy\",\"session\":\"July 2026\",\"set\":\"B\",\"reason\":\"Archive extraction is incomplete or uses a different historical format; readable questions were still checked\"}]},\"warning\":\"Upload accepted for review; repeat checking used the readable archived questions only. Missing or incomplete archives need administrator review.\",\"template\":{\"passed\":true,\"paper_type\":\"common_rm\",\"expected\":\"25 RM\",\"checks\":[\"Word .docx format\",\"Numbered question count and sections\",\"Four labelled MCQ options\",\"No unfilled question placeholders\"],\"errors\":[],\"warnings\":[]}}"
+      },
+      "sha256": "2308c80db34df2a105bd62cb6c1b20396fc54851bff20b39e5e0da38dd641867"
+    },
+    {
+      "paper": {
+        "id": "938b48ba-25b4-4ee6-9ce7-59145afca608",
+        "department_id": 201,
+        "campus_id": 1,
+        "session": "January 2027",
+        "set_name": "A",
+        "kind": "submission",
+        "original_name": "Rmp_All Department _Jan_2027_QP_Set_B.docx",
+        "path": "D:\\Phd_Admissions_Webapp\\PhD_Question_Paper_Workspace\\question-paper-app\\data\\files\\938b48ba-25b4-4ee6-9ce7-59145afca608.docx",
+        "uploaded_by": 5,
+        "counts": "{\"research\":25,\"subject\":0}",
+        "valid": 1,
+        "reviewed": 0,
+        "created_at": "2026-10-08T07:45:20.319Z"
+      },
+      "screening": {
+        "report": "{\"total_questions\":25,\"matched_count\":0,\"limit\":10,\"rejected\":false,\"matches\":[],\"method\":\"Local exact-question and likely-rephrasing screening; human review is still required.\",\"coverage\":{\"complete\":false,\"checked_papers\":8,\"checked_questions\":188,\"issues\":[{\"campus\":\"Ramapuram\",\"session\":\"January 2026\",\"set\":\"B\",\"reason\":\"Archive extraction is incomplete or uses a different historical format; readable questions were still checked\"},{\"campus\":\"Trichy\",\"session\":\"January 2026\",\"set\":\"A\",\"reason\":\"Archive extraction is incomplete or uses a different historical format; readable questions were still checked\"},{\"campus\":\"Trichy\",\"session\":\"July 2026\",\"set\":\"A\",\"reason\":\"Archive extraction is incomplete or uses a different historical format; readable questions were still checked\"},{\"campus\":\"Trichy\",\"session\":\"July 2026\",\"set\":\"B\",\"reason\":\"Archive extraction is incomplete or uses a different historical format; readable questions were still checked\"}]},\"warning\":\"Upload accepted for review; repeat checking used the readable archived questions only. Missing or incomplete archives need administrator review.\",\"template\":{\"passed\":true,\"paper_type\":\"common_rm\",\"expected\":\"25 RM\",\"checks\":[\"Word .docx format\",\"Numbered question count and sections\",\"Four labelled MCQ options\",\"No unfilled question placeholders\"],\"errors\":[],\"warnings\":[]}}"
+      },
+      "sha256": "2308c80db34df2a105bd62cb6c1b20396fc54851bff20b39e5e0da38dd641867"
+    }
+  ]
+}

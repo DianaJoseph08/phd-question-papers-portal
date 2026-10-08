@@ -1,4 +1,4 @@
-﻿@echo off
+@echo off
 title Push PhD Question Papers Portal to GitHub for Google Cloud
 echo ==================================================================
 echo   SRMIST PhD Question Papers Portal - Google Cloud Deployment
@@ -52,12 +52,14 @@ if %errorlevel% equ 0 (
     echo.
     echo 1. Open Google Cloud Console: https://console.cloud.google.com/
     echo 2. Click the Cloud Shell icon [>_] in the top right toolbar.
-    echo 3. Run:
-    echo    gcloud run deploy phd-portal --source . --region asia-south1 --allow-unauthenticated
+    echo 3. In Cloud Shell, run:
     echo.
-    echo (Note: If it is your first time in Cloud Shell, clone your repo first:)
-    echo    git clone <YOUR_REPO_URL>
-    echo    cd <YOUR_REPO_NAME>
+    echo    git clone https://github.com/DianaJoseph08/phd-question-papers-portal.git
+    echo    cd phd-question-papers-portal
+    echo.
+    echo    (Or if already cloned, pull latest: git pull origin main)
+    echo.
+    echo    gcloud run deploy phd-portal --source . --region asia-south1 --allow-unauthenticated --port 8080 --memory 1Gi
     echo.
 ) else (
     echo.

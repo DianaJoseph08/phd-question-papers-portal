@@ -1,0 +1,20 @@
+[
+  {
+    "set": "A",
+    "file": "Rmp_All Department _Jan_2027_QP_Set_A.docx",
+    "counts": {
+      "research": 25,
+      "subject": 0
+    },
+    "status": "Awaiting review"
+  },
+  {
+    "set": "B",
+    "file": "Rmp_All Department _Jan_2027_QP_Set_B.docx",
+    "counts": {
+      "research": 25,
+      "subject": 0
+    },
+    "status": "Awaiting review"
+  }
+]

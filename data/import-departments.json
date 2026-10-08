@@ -1,0 +1,296 @@
+[
+  {
+    "id": 1,
+    "name": "Mechanical Engineering",
+    "institution": "Faculty of Engineering and Technology",
+    "campus": "Ramapuram"
+  },
+  {
+    "id": 2,
+    "name": "Electronics and Communication Engineering",
+    "institution": "Faculty of Engineering and Technology",
+    "campus": "Ramapuram"
+  },
+  {
+    "id": 3,
+    "name": "Electrical and Electronics Engineering",
+    "institution": "Faculty of Engineering and Technology",
+    "campus": "Ramapuram"
+  },
+  {
+    "id": 4,
+    "name": "Civil Engineering",
+    "institution": "Faculty of Engineering and Technology",
+    "campus": "Ramapuram"
+  },
+  {
+    "id": 5,
+    "name": "Computer Science and Engineering",
+    "institution": "Faculty of Engineering and Technology",
+    "campus": "Ramapuram"
+  },
+  {
+    "id": 6,
+    "name": "Biotechnology",
+    "institution": "Faculty of Engineering and Technology",
+    "campus": "Ramapuram"
+  },
+  {
+    "id": 7,
+    "name": "Biomedical Engineering",
+    "institution": "Faculty of Engineering and Technology",
+    "campus": "Ramapuram"
+  },
+  {
+    "id": 8,
+    "name": "Mathematics",
+    "institution": "Faculty of Engineering and Technology",
+    "campus": "Ramapuram"
+  },
+  {
+    "id": 9,
+    "name": "Physics",
+    "institution": "Faculty of Engineering and Technology",
+    "campus": "Ramapuram"
+  },
+  {
+    "id": 10,
+    "name": "Chemistry",
+    "institution": "Faculty of Engineering and Technology",
+    "campus": "Ramapuram"
+  },
+  {
+    "id": 11,
+    "name": "English",
+    "institution": "Faculty of Engineering and Technology",
+    "campus": "Ramapuram"
+  },
+  {
+    "id": 12,
+    "name": "Computer Science",
+    "institution": "Faculty of Liberal Arts and Business Studies",
+    "campus": "Ramapuram"
+  },
+  {
+    "id": 13,
+    "name": "Mathematics",
+    "institution": "Faculty of Liberal Arts and Business Studies",
+    "campus": "Ramapuram"
+  },
+  {
+    "id": 14,
+    "name": "Biotechnology",
+    "institution": "Faculty of Liberal Arts and Business Studies",
+    "campus": "Ramapuram"
+  },
+  {
+    "id": 15,
+    "name": "Commerce",
+    "institution": "Faculty of Liberal Arts and Business Studies",
+    "campus": "Ramapuram"
+  },
+  {
+    "id": 16,
+    "name": "Fashion Designing",
+    "institution": "Faculty of Liberal Arts and Business Studies",
+    "campus": "Ramapuram"
+  },
+  {
+    "id": 17,
+    "name": "Visual Communication",
+    "institution": "Faculty of Liberal Arts and Business Studies",
+    "campus": "Ramapuram"
+  },
+  {
+    "id": 18,
+    "name": "Tamil",
+    "institution": "Faculty of Liberal Arts and Business Studies",
+    "campus": "Ramapuram"
+  },
+  {
+    "id": 19,
+    "name": "English",
+    "institution": "Faculty of Liberal Arts and Business Studies",
+    "campus": "Ramapuram"
+  },
+  {
+    "id": 20,
+    "name": "Hindi",
+    "institution": "Faculty of Liberal Arts and Business Studies",
+    "campus": "Ramapuram"
+  },
+  {
+    "id": 28,
+    "name": "Dentistry",
+    "institution": "SRM Dental College",
+    "campus": "Ramapuram"
+  },
+  {
+    "id": 29,
+    "name": "Management Studies",
+    "institution": "Faculty of Management",
+    "campus": "Ramapuram"
+  },
+  {
+    "id": 30,
+    "name": "Mechanical Engineering",
+    "institution": "College of Engineering and Technology",
+    "campus": "Trichy"
+  },
+  {
+    "id": 31,
+    "name": "Electronics and Communication Engineering",
+    "institution": "College of Engineering and Technology",
+    "campus": "Trichy"
+  },
+  {
+    "id": 32,
+    "name": "Electrical and Electronics Engineering",
+    "institution": "College of Engineering and Technology",
+    "campus": "Trichy"
+  },
+  {
+    "id": 33,
+    "name": "Computer Science and Engineering",
+    "institution": "College of Engineering and Technology",
+    "campus": "Trichy"
+  },
+  {
+    "id": 34,
+    "name": "Biotechnology",
+    "institution": "College of Engineering and Technology",
+    "campus": "Trichy"
+  },
+  {
+    "id": 35,
+    "name": "Mathematics",
+    "institution": "College of Engineering and Technology",
+    "campus": "Trichy"
+  },
+  {
+    "id": 36,
+    "name": "Physics",
+    "institution": "College of Engineering and Technology",
+    "campus": "Trichy"
+  },
+  {
+    "id": 37,
+    "name": "Chemistry",
+    "institution": "College of Engineering and Technology",
+    "campus": "Trichy"
+  },
+  {
+    "id": 38,
+    "name": "Commerce",
+    "institution": "College of Science and Humanities",
+    "campus": "Trichy"
+  },
+  {
+    "id": 39,
+    "name": "Computer Science",
+    "institution": "College of Science and Humanities",
+    "campus": "Trichy"
+  },
+  {
+    "id": 40,
+    "name": "Biotechnology",
+    "institution": "College of Science and Humanities",
+    "campus": "Trichy"
+  },
+  {
+    "id": 41,
+    "name": "Biochemistry",
+    "institution": "College of Science and Humanities",
+    "campus": "Trichy"
+  },
+  {
+    "id": 42,
+    "name": "Microbiology",
+    "institution": "College of Science and Humanities",
+    "campus": "Trichy"
+  },
+  {
+    "id": 43,
+    "name": "Occupational Therapy",
+    "institution": "College of Occupational Therapy",
+    "campus": "Trichy"
+  },
+  {
+    "id": 44,
+    "name": "Medical Imaging Technology",
+    "institution": "College of Allied Health Sciences",
+    "campus": "Trichy"
+  },
+  {
+    "id": 45,
+    "name": "Clinical Psychology",
+    "institution": "College of Allied Health Sciences",
+    "campus": "Trichy"
+  },
+  {
+    "id": 46,
+    "name": "Renal Dialysis Technology",
+    "institution": "College of Allied Health Sciences",
+    "campus": "Trichy"
+  },
+  {
+    "id": 47,
+    "name": "Anaesthesia Technology",
+    "institution": "College of Allied Health Sciences",
+    "campus": "Trichy"
+  },
+  {
+    "id": 100,
+    "name": "Unclassified / Pending Mapping",
+    "institution": "Ramapuram Research Office",
+    "campus": "Ramapuram"
+  },
+  {
+    "id": 101,
+    "name": "Unclassified / Pending Mapping (Trichy)",
+    "institution": "Trichy Research Office",
+    "campus": "Trichy"
+  },
+  {
+    "id": 102,
+    "name": "MANAGEMENT STUDIES",
+    "institution": "College of Management Studies",
+    "campus": "Trichy"
+  },
+  {
+    "id": 105,
+    "name": "CLINICAL PSYCOLOGY",
+    "institution": "College of Engineering and Technology",
+    "campus": "Trichy"
+  },
+  {
+    "id": 107,
+    "name": "English",
+    "institution": "College of Science and Humanities",
+    "campus": "Trichy"
+  },
+  {
+    "id": 108,
+    "name": "Tamil",
+    "institution": "College of Science and Humanities",
+    "campus": "Trichy"
+  },
+  {
+    "id": 109,
+    "name": "Physical Education",
+    "institution": "College of Science and Humanities",
+    "campus": "Trichy"
+  },
+  {
+    "id": 201,
+    "name": "Common Research Methodology (E&T)",
+    "institution": "Faculty of Engineering and Technology",
+    "campus": "Ramapuram"
+  },
+  {
+    "id": 202,
+    "name": "Common Research Methodology (E&T Trichy)",
+    "institution": "College of Engineering and Technology",
+    "campus": "Trichy"
+  }
+]

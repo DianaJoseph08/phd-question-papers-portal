@@ -1,9 +1,10 @@
-data/
+data/final-archive-import/
+data/latest-archive-import/
+data/test-runs/
 node_modules/
 .git/
 *.log
 test*.js
 integration-test.js
 ui-test.js
-README.md
 deploy/

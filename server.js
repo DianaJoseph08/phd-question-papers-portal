@@ -5,12 +5,20 @@ const {commonFor,inspectForDepartment,validateTemplate}=require('./submission-po
 const {setFromFilename}=require('./public/upload-set');
 const root=__dirname, data=process.env.QUESTION_PAPER_DATA_DIR||path.join(root,'data'), parent=path.dirname(root);
 fs.mkdirSync(path.join(data,'files'),{recursive:true});
-const source=new sqlite.Database(process.env.ADMISSIONS_DB||path.join(parent,'phd_admissions.db'),sqlite.OPEN_READONLY);
+function resolvePath(filePath){
+ if(!filePath)return filePath;
+ if(fs.existsSync(filePath))return filePath;
+ const candidate=path.join(data,'files',path.basename(filePath));
+ if(fs.existsSync(candidate))return candidate;
+ return filePath;
+}
+const admissionsDbPath=process.env.ADMISSIONS_DB||(fs.existsSync(path.join(data,'phd_admissions.db'))?path.join(data,'phd_admissions.db'):(fs.existsSync(path.join(root,'phd_admissions.db'))?path.join(root,'phd_admissions.db'):path.join(parent,'phd_admissions.db')));
+const source=new sqlite.Database(admissionsDbPath,sqlite.OPEN_READONLY);
 const db=new sqlite.Database(path.join(data,'papers.db'));
 const all=(d,sql,args=[])=>new Promise((resolve,reject)=>d.all(sql,args,(e,r)=>e?reject(e):resolve(r)));
 const run=(sql,args=[])=>new Promise((resolve,reject)=>db.run(sql,args,function(e){e?reject(e):resolve(this)}));
 const app=express(), sessions=new Map(), attempts=new Map();
-if(process.env.TRUST_PROXY==='1'||process.env.TRUST_PROXY==='true')app.set('trust proxy',1);
+if(process.env.TRUST_PROXY==='1'||process.env.TRUST_PROXY==='true'||process.env.NODE_ENV==='production')app.set('trust proxy',1);
 app.disable('x-powered-by');app.use(express.json({limit:'1mb'}));
 app.use((req,res,next)=>{res.set('X-Content-Type-Options','nosniff');res.set('Referrer-Policy','same-origin');res.set('Cache-Control','no-store');res.set('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; frame-ancestors 'none'; form-action 'self'");if(!['GET','HEAD','OPTIONS'].includes(req.method)&&req.get('origin')&&req.get('origin')!==`${req.protocol}://${req.get('host')}`)return res.status(403).json({error:'Cross-origin request refused.'});next();});
 const upload=multer({storage:multer.memoryStorage(),limits:{fileSize:20*1024*1024,files:1}});
@@ -48,7 +56,7 @@ async function screeningFor(department,info,set) {
  for(const d of related)for(const session of ['January 2026','July 2026'])for(const set_name of ['A','B']){
   const p=latest.get(d.id+'|'+session+'|'+set_name);
   if(!p){missing.push({campus:d.campus,session,set:set_name,reason:'Not uploaded'});continue;}
-  let parsed;try{parsed=inspectForDepartment(fs.readFileSync(p.path),d);}catch(e){missing.push({campus:d.campus,session,set:set_name,reason:'Archive could not be read; administrator review is needed'});continue;}
+  let parsed;try{parsed=inspectForDepartment(fs.readFileSync(resolvePath(p.path)),d);}catch(e){missing.push({campus:d.campus,session,set:set_name,reason:'Archive could not be read; administrator review is needed'});continue;}
   if(!parsed.valid)missing.push({campus:d.campus,session,set:set_name,reason:'Archive extraction is incomplete or uses a different historical format; readable questions were still checked'});
   if(parsed.questions.length)archives.push({...p,campus:d.campus,questions:parsed.questions.filter(q=>!/question\s+starts?\s+here/i.test(q.text))});
  }
@@ -74,13 +82,13 @@ app.post('/api/papers',upload.single('file'),async(req,res)=>{if(!req.file)throw
 app.get('/api/papers/:id/:action',async(req,res)=>{
  const p=(await all(db,'SELECT * FROM papers WHERE id=?',[req.params.id]))[0];const d=p&&departments.find(d=>d.id===p.department_id);
  if(!p||!scope(req.user,d)||(!admin(req.user)&&p.kind==='submission'&&p.uploaded_by!==req.user.id&&req.user.role!=='coordinator'))return res.status(404).json({error:'Paper not found.'});
- if(req.params.action==='download')return res.download(p.path,p.original_name);
+ if(req.params.action==='download')return res.download(resolvePath(p.path),p.original_name);
  if(req.params.action!=='preview')return res.status(404).end();
- const info=inspectForDepartment(fs.readFileSync(p.path),d);res.json({paper:{...p,path:undefined},screening:JSON.parse((await all(db,'SELECT report FROM screenings WHERE paper_id=?',[p.id]))[0]?.report||'null'),counts:info.counts,valid:info.valid,questions:info.questions.map(({section,text})=>({section,text})),text:require('./papers').text(new (require('@xmldom/xmldom').DOMParser)().parseFromString(new(require('pizzip'))(fs.readFileSync(p.path)).file('word/document.xml').asText(),'application/xml'))});
+ const pbuf=fs.readFileSync(resolvePath(p.path)),info=inspectForDepartment(pbuf,d);res.json({paper:{...p,path:undefined},screening:JSON.parse((await all(db,'SELECT report FROM screenings WHERE paper_id=?',[p.id]))[0]?.report||'null'),counts:info.counts,valid:info.valid,questions:info.questions.map(({section,text})=>({section,text})),text:require('./papers').text(new (require('@xmldom/xmldom').DOMParser)().parseFromString(new(require('pizzip'))(pbuf).file('word/document.xml').asText(),'application/xml'))});
 });
-app.post('/api/papers/:id/review',requireAdmin,async(req,res)=>{const p=(await all(db,'SELECT * FROM papers WHERE id=?',[req.params.id]))[0];if(!p||p.kind!=='submission'||!p.valid)throw Error('Only valid complete submissions can be approved.');const d=departments.find(d=>d.id===p.department_id),buffer=fs.readFileSync(p.path),info=inspectForDepartment(buffer,d),validation=validateTemplate(buffer,d,info);if(!validation.passed){const e=Error('The paper needs template corrections before approval.');e.status=422;e.details={template:validation};throw e;}const report=await screeningFor(d,info,p.set_name);report.template=validation;rejectMatches(report);await run('INSERT OR REPLACE INTO screenings VALUES (?,?)',[p.id,JSON.stringify(report)]);await run('UPDATE papers SET reviewed=1 WHERE id=?',[p.id]);res.json({ok:true});});
+app.post('/api/papers/:id/review',requireAdmin,async(req,res)=>{const p=(await all(db,'SELECT * FROM papers WHERE id=?',[req.params.id]))[0];if(!p||p.kind!=='submission'||!p.valid)throw Error('Only valid complete submissions can be approved.');const d=departments.find(d=>d.id===p.department_id),buffer=fs.readFileSync(resolvePath(p.path)),info=inspectForDepartment(buffer,d),validation=validateTemplate(buffer,d,info);if(!validation.passed){const e=Error('The paper needs template corrections before approval.');e.status=422;e.details={template:validation};throw e;}const report=await screeningFor(d,info,p.set_name);report.template=validation;rejectMatches(report);await run('INSERT OR REPLACE INTO screenings VALUES (?,?)',[p.id,JSON.stringify(report)]);await run('UPDATE papers SET reviewed=1 WHERE id=?',[p.id]);res.json({ok:true});});
 app.post('/api/templates/:set',requireAdmin,upload.single('file'),async(req,res)=>{if(!['A','B'].includes(req.params.set)||!req.file||!req.file.originalname.toLowerCase().endsWith('.docx'))throw Error('Select a Set A/B Word template.');inspect(req.file.buffer);const file=path.join(data,'files',crypto.randomUUID()+'.docx');fs.writeFileSync(file,req.file.buffer);await run('INSERT OR REPLACE INTO templates VALUES (?,?,?,?)',[req.params.set,req.file.originalname,file,new Date().toISOString()]);res.json({ok:true});});
-app.get('/api/templates/:set',async(req,res)=>{const t=(await all(db,'SELECT * FROM templates WHERE set_name=?',[req.params.set]))[0];if(!t)return res.status(404).json({error:'Template not uploaded.'});res.download(t.path,t.original_name);});
+app.get('/api/templates/:set',async(req,res)=>{const t=(await all(db,'SELECT * FROM templates WHERE set_name=?',[req.params.set]))[0];if(!t)return res.status(404).json({error:'Template not uploaded.'});res.download(resolvePath(t.path),t.original_name);});
 let inventory=[];
 function scan(dir){for(const e of fs.readdirSync(dir,{withFileTypes:true})){const file=path.join(dir,e.name);if(e.isDirectory())scan(file);else if(/\.docx$/i.test(e.name)&&!e.name.startsWith('~$')){const rel=path.relative(path.join(parent,'Question Papers 2026'),file);inventory.push({id:inventory.length,name:e.name,relative:rel,path:file});}}}
 app.get('/api/inventory',requireAdmin,(req,res)=>res.json(inventory.map(({path:ignored,...f})=>f)));
@@ -96,7 +104,7 @@ app.post('/api/generate',requireAdmin,async(req,res)=>{
   const key=d.id+'|'+sourceSet;if(checked.has(key))return checked.get(key);
   const p=latest.get(key);
   if(!p?.reviewed)throw Error('Generation needs approved Set '+sourceSet+' for '+d.campus+' / '+d.institution+' / '+d.name+(d.is_common?' from '+d.coordinator_name:'')+'. Subject submissions can be uploaded while Common RM is pending.');
-  const buffer=fs.readFileSync(p.path),info=inspectForDepartment(buffer,d),validation=validateTemplate(buffer,d,info);
+  const buffer=fs.readFileSync(resolvePath(p.path)),info=inspectForDepartment(buffer,d),validation=validateTemplate(buffer,d,info);
   if(!validation.passed){const e=Error('Template corrections are required for '+d.name+', Set '+sourceSet+'.');e.status=422;e.details={template:validation};throw e;}
   const report=await screeningFor(d,info,sourceSet);report.template=validation;rejectMatches(report);
   const pool={...p,campus:p.campus_id,paper_type:info.paper_type,questions:info.questions};checked.set(key,pool);return pool;
@@ -121,7 +129,7 @@ app.post('/api/generate',requireAdmin,async(req,res)=>{
  const manifest=JSON.stringify(chosen.map((q,i)=>({number:i+1,section:q.section,campus:q.source.campus,paper_id:q.source.id,department_id:q.source.department_id,source_set:q.source.set_name,contributing_department_id:q.contributing_department_id||q.source.department_id,hash:q.hash,text:q.text})));
  await run('INSERT INTO generations (id,department_key,department_name,set_name,path,distribution,manifest) VALUES (?,?,?,?,?,?,?)',[id,departmentKey(department),department.name,set,file,distribution,manifest]);res.json({id,distribution:JSON.parse(distribution)});
 });
-app.get('/api/generations/:id/:action',requireAdmin,async(req,res)=>{const g=(await all(db,'SELECT * FROM generations WHERE id=?',[req.params.id]))[0];if(!g)return res.status(404).end();if(req.params.action==='manifest')return res.json({distribution:JSON.parse(g.distribution),questions:JSON.parse(g.manifest)});if(req.params.action!=='download')return res.status(404).end();res.download(g.path,`January-2027-${g.department_name.replace(/[^a-z0-9]/gi,'-')}-Set-${g.set_name}.docx`);});
+app.get('/api/generations/:id/:action',requireAdmin,async(req,res)=>{const g=(await all(db,'SELECT * FROM generations WHERE id=?',[req.params.id]))[0];if(!g)return res.status(404).end();if(req.params.action==='manifest')return res.json({distribution:JSON.parse(g.distribution),questions:JSON.parse(g.manifest)});if(req.params.action!=='download')return res.status(404).end();res.download(resolvePath(g.path),`January-2027-${g.department_name.replace(/[^a-z0-9]/gi,'-')}-Set-${g.set_name}.docx`);});
 app.use(express.static(path.join(root,'public')));
 app.use((err,req,res,next)=>{console.error(err.message);res.status(err.status||400).json({...err.details,error:err.code==='LIMIT_FILE_SIZE'?'Maximum upload size is 20 MB.':err.message||'Request failed.'});});
 async function start(){
@@ -136,7 +144,8 @@ async function start(){
  for(const d of departments){d.common_rm_id=commonFor(d);d.submission_format=d.is_common?'25 RM':d.common_rm_id?'25 subject':'25 RM + 25 subject';}
  for(const set of ['A','B']){if(!(await all(db,'SELECT * FROM templates WHERE set_name=?',[set])).length){const original=path.join(parent,'Question_Paper_Setting',`Rmp_Department name_Jan_2027_QP_Set_${set}.docx`);if(fs.existsSync(original)){const dest=path.join(data,'files',`initial-template-${set}.docx`);fs.copyFileSync(original,dest);await run('INSERT INTO templates VALUES (?,?,?,?)',[set,path.basename(original),dest,new Date().toISOString()]);}}}
  if(fs.existsSync(path.join(parent,'Question Papers 2026')))scan(path.join(parent,'Question Papers 2026'));
- return app.listen(Number(process.env.PORT)||3100,process.env.HOST||'127.0.0.1',()=>console.log('Question paper app: http://127.0.0.1:'+(process.env.PORT||3100)));
+ const port=Number(process.env.PORT)||8080, host=process.env.HOST||'0.0.0.0';
+ return app.listen(port,host,()=>console.log('Question paper app: http://'+host+':'+port));
 }
 if(require.main===module)start().catch(e=>{console.error(e);process.exit(1);});
 module.exports={app,start};
