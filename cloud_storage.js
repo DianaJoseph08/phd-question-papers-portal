@@ -2,33 +2,27 @@
 const fs = require('fs');
 const path = require('path');
 
-let BUCKET_NAME = process.env.GCS_BUCKET_NAME || 'pragmatic-app-505807-g5-phd-portal-docs';
+const isGCP = Boolean(process.env.K_SERVICE || process.env.GOOGLE_APPLICATION_CREDENTIALS || process.env.GCS_BUCKET_NAME || process.env.GAE_ENV);
+const BUCKET_NAME = process.env.GCS_BUCKET_NAME || 'pragmatic-app-505807-g5-phd-portal-docs';
 let storage = null;
 let bucket = null;
 let gcsAvailable = false;
 
 function initStorage() {
     if (storage) return;
+    if (!isGCP) return;
     try {
         storage = new Storage();
+        bucket = storage.bucket(BUCKET_NAME);
         gcsAvailable = true;
     } catch (e) {
-        console.warn(`[Storage] Cloud Storage not initialized (using local disk): ${e.message}`);
+        console.warn(`[Storage] Cloud Storage init notice: ${e.message}`);
     }
 }
 
 async function getBucket() {
     initStorage();
-    if (!gcsAvailable || !storage) return null;
-    if (bucket) return bucket;
-
-    if (!process.env.GCS_BUCKET_NAME) {
-        try {
-            const projectId = await storage.getProjectId();
-            if (projectId) BUCKET_NAME = `${projectId}-phd-portal-docs`;
-        } catch (e) {}
-    }
-    bucket = storage.bucket(BUCKET_NAME);
+    if (!gcsAvailable || !bucket) return null;
     return bucket;
 }
 

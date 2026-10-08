@@ -147,8 +147,6 @@ app.get('/api/generations/:id/:action',requireAdmin,async(req,res)=>{const g=(aw
 app.use(express.static(path.join(root,'public')));
 app.use((err,req,res,next)=>{console.error(err.message);res.status(err.status||400).json({...err.details,error:err.code==='LIMIT_FILE_SIZE'?'Maximum upload size is 20 MB.':err.message||'Request failed.'});});
 async function start(){
- await cloudStorage.ensureBucketExists().catch(()=>{});
- await cloudStorage.restoreDatabaseFromGCS(path.join(data,'papers.db')).catch(()=>{});
  await run('CREATE TABLE IF NOT EXISTS screenings (paper_id TEXT PRIMARY KEY,report TEXT)');
  await run(`CREATE TABLE IF NOT EXISTS papers (id TEXT PRIMARY KEY,department_id INTEGER,campus_id INTEGER,session TEXT,set_name TEXT,kind TEXT,original_name TEXT,path TEXT,uploaded_by INTEGER,counts TEXT,valid INTEGER,reviewed INTEGER,created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')))`);
  await run('CREATE TABLE IF NOT EXISTS templates (set_name TEXT PRIMARY KEY,original_name TEXT,path TEXT,updated_at TEXT)');
@@ -160,9 +158,16 @@ async function start(){
  for(const d of departments){d.common_rm_id=commonFor(d);d.submission_format=d.is_common?'25 RM':d.common_rm_id?'25 subject':'25 RM + 25 subject';}
  for(const set of ['A','B']){if(!(await all(db,'SELECT * FROM templates WHERE set_name=?',[set])).length){const original=path.join(parent,'Question_Paper_Setting',`Rmp_Department name_Jan_2027_QP_Set_${set}.docx`);if(fs.existsSync(original)){const dest=path.join(data,'files',`initial-template-${set}.docx`);fs.copyFileSync(original,dest);await run('INSERT INTO templates VALUES (?,?,?,?)',[set,path.basename(original),dest,new Date().toISOString()]);}}}
  if(fs.existsSync(path.join(parent,'Question Papers 2026')))scan(path.join(parent,'Question Papers 2026'));
- cloudStorage.syncInitialFilesToGCS(path.join(data,'files')).catch(()=>{});
  const port=Number(process.env.PORT)||8080, host=process.env.HOST||'0.0.0.0';
- return app.listen(port,host,()=>console.log('Question paper app: http://'+host+':'+port));
+ const server=app.listen(port,host,()=>console.log('Question paper app: http://'+host+':'+port));
+ (async()=>{
+  try{
+   await cloudStorage.ensureBucketExists();
+   await cloudStorage.restoreDatabaseFromGCS(path.join(data,'papers.db'));
+   cloudStorage.syncInitialFilesToGCS(path.join(data,'files')).catch(()=>{});
+  }catch(e){console.warn('[Storage] GCS sync notice:', e.message);}
+ })();
+ return server;
 }
 if(require.main===module)start().catch(e=>{console.error(e);process.exit(1);});
 module.exports={app,start};
