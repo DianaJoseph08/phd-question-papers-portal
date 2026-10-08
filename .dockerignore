@@ -1,0 +1,9 @@
+data/
+node_modules/
+.git/
+*.log
+test*.js
+integration-test.js
+ui-test.js
+README.md
+deploy/
