@@ -9,7 +9,7 @@ function commonFor(d){
 }
 const placeholder=q=>/\b(?:the\s+)?question\s+starts?\s+here\b/i.test(q.text);
 function inspectForDepartment(buffer,d){
- const info=inspect(buffer),warnings=[];
+ const info=inspect(buffer,{subjectName:d.is_common?undefined:d.name}),warnings=[];
  // A common-RM department may leave the unused RM template placeholders in place.
  if(d.common_rm_id&&info.questions.filter(q=>q.section==='subject').length===25){
   const unused=info.questions.filter(q=>q.section==='research'&&placeholder(q));
@@ -46,6 +46,6 @@ function validateTemplate(buffer,d,info){
  const doc=new DOMParser().parseFromString(new Zip(buffer).file('word/document.xml').asText(),'application/xml');
  const key=Array.from(doc.getElementsByTagName('w:p')).some(p=>isAnswerKeyHeading(text(p).trim()));
  if(!key)warnings.push('No separate Answer Key heading detected. The administrator must check the supplied answers before approval.');
- return {passed:errors.length===0,paper_type:info.paper_type,expected:d.is_common?'25 RM':d.common_rm_id?'25 subject (Common RM supplied separately)':'25 RM + 25 subject',checks:['Word .docx format','Numbered question count and sections','No unfilled question placeholders'],errors,warnings,option_errors};
+ return {passed:errors.length===0,paper_type:info.paper_type,counts:info.counts,expected:d.is_common?'25 RM':d.common_rm_id?'25 subject (Common RM supplied separately)':'25 RM + 25 subject',checks:['Word .docx format','Numbered question count and sections','No unfilled question placeholders'],errors,warnings,option_errors};
 }
-module.exports={commonFor,inspectForDepartment,validateTemplate};
+module.exports={commonFor,inspectForDepartment,validateTemplate,placeholder};

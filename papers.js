@@ -8,7 +8,7 @@ const parse = x => new DOMParser().parseFromString(x,'application/xml');
 const serialize = n => new XMLSerializer().serializeToString(n);
 function text(n) {let result='';function visit(node){if(node.nodeName==='w:t')result+=node.textContent;else if(['w:br','w:cr'].includes(node.nodeName))result+='\n';else if(node.nodeName==='w:tab')result+='\t';else for(let child=node.firstChild;child;child=child.nextSibling)visit(child);}visit(n);return result;}
 const isAnswerKeyHeading=t=>t.length<100&&(/answer\s*key\s*$/i.test(t)||/^answer\s*key\b/i.test(t));
-function inspect(buffer) {
+function inspect(buffer,{subjectName}={}) {
  const zip=new Zip(buffer); const entry=zip.file('word/document.xml');
  if(!entry) throw Error('Upload a valid Word .docx document.');
  if(entry.asText().length>15000000) throw Error('Document is too large to process.');
@@ -40,9 +40,19 @@ function inspect(buffer) {
   const paired=t.match(/^(?:part|section)\s*[b2][.:) –—-]+(.+)$/i);
   if(paired&&!/research\s+methodology/i.test(paired[1]))return 'subject';
   if(/^mathematics(?:\s+\(|\s+-|\s*$)/i.test(t))return 'subject';
+  // A standalone department title is also a subject heading in its assigned paper.
+  const title=t.replace(/\s*\((?:\d+\s*(?:questions?|marks?)|subject[^)]*)\)\s*$/i,'').replace(/\s+questions?\s*$/i,'').trim();
+  if(subjectName&&title.toLowerCase()===subjectName.trim().toLowerCase())return 'subject';
   return null;
  };
  const hasSections=paragraphs.some(p=>!inSummary(p)&&!p.getElementsByTagName('w:numPr').length&&heading(text(p).trim()));
+ function firstQuestionCell(p,t){
+  if(!/^1[.)]?$/.test(t))return false;
+  let cell=p.parentNode;while(cell&&cell.nodeName!=='w:tc')cell=cell.parentNode;
+  if(!cell||cell.parentNode?.nodeName!=='w:tr')return false;
+  const cells=Array.from(cell.parentNode.childNodes).filter(n=>n.nodeName==='w:tc');
+  return cells[0]===cell&&cells.length>1&&cells.slice(1).some(c=>text(c).trim()||c.getElementsByTagName('w:drawing').length||c.getElementsByTagName('w:pict').length);
+ }
  let section=null,pending=[],questions=[],letter=0,started=false,number=null;
  function flush(){if(!pending.length)return;const combined=pending.map(x=>text(parse(x))).join('\n');questions.push({section:section||'unclassified',number,xml:pending.join(''),text:combined,hash:crypto.createHash('sha256').update(combined.toLowerCase().replace(/[^\p{L}\p{N}]/gu,'')).digest('hex')});pending=[];letter=0;}
  for(const p of paragraphs){
@@ -58,7 +68,7 @@ function inspect(buffer) {
   const manual=t.match(/^(?:Q(?:uestion)?\s*\.?\s*)?(\d{1,3})\s*[.)]\s*(?!\d)/i)||t.match(/^(\d{1,3})$/);
   const automatic=['decimal','decimalZero'].includes(format(p))&&(p.getElementsByTagName('w:ilvl')[0]?.getAttribute('w:val')||'0')==='0';
   const questionLike=/[?？]|\b[A-D][.)]\s|^(which|what|how|why|define|explain|identify|describe)\b/i.test(t);
-  const boundary=(manual||automatic)&&(section||started||questionLike);
+  const boundary=(manual||automatic)&&(section||started||questionLike||firstQuestionCell(p,t));
   if(boundary){flush();number=manual?Number(manual[1]):null;started=true;}
   if(!started)continue;
   if(!t&&!p.getElementsByTagName('w:drawing').length&&!p.getElementsByTagName('m:oMath').length&&!p.getElementsByTagName('w:pict').length)continue;

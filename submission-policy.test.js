@@ -28,12 +28,26 @@ test('unused RM placeholders do not block valid subject questions',()=>{
  const buffer=z.generate({type:'nodebuffer'}),info=inspectForDepartment(buffer,linked);assert.equal(info.valid,true);assert.equal(info.questions.length,25);assert.ok(info.warnings.length);
  assert.equal(validateTemplate(buffer,linked,info).passed,true);
 });
-test('template validation rejects missing options and incorrect question count',()=>{
+test('option labels are nonblocking while incorrect question count is rejected',()=>{
  const formatting=fixture([['Subject-Specific Questions',25]],'A) one A) two C) three D) four');
  const formattingResult=validateTemplate(formatting,linked,inspectForDepartment(formatting,linked));assert.equal(formattingResult.passed,true);assert.ok(formattingResult.option_errors.length);
  const count=fixture([['Subject-Specific Questions',24]]),countResult=validateTemplate(count,linked,inspectForDepartment(count,linked));assert.equal(countResult.passed,false);assert.ok(countResult.errors.length);
 });
 test('department heading identifies the assigned subject section',()=>{const buffer=fixture([['Mathematics',25]]);const info=inspectForDepartment(buffer,linked);assert.equal(info.valid,true);assert.equal(info.counts.subject,25);});
+test('Trichy faculties accept subject-only papers with named department headings',()=>{
+ for(const [name,institution,common] of [['Chemistry','College of Engineering and Technology',202],['Commerce','College of Science and Humanities',-203],['Medical Imaging Technology','College of Allied Health Sciences',-204],['Occupational Therapy','College of Occupational Therapy',-204]]){
+  const d={name,campus_id:2,institution};d.common_rm_id=commonFor(d);assert.equal(d.common_rm_id,common);
+  const b=fixture([[name+' Questions',25]],'first choice second choice third choice fourth choice'),info=inspectForDepartment(b,d);
+  assert.deepEqual(info.counts,{research:0,subject:25});assert.equal(validateTemplate(b,d,info).passed,true);
+  const full=inspectForDepartment(fixture([['Research Methodology',25],[name,25]]),d);assert.deepEqual(full.counts,{research:25,subject:25});assert.equal(full.valid,true);
+ }
+});
+test('number-only table cells start question extraction without counting options',()=>{
+ const p=t=>`<w:p><w:r><w:t>${t}</w:t></w:r></w:p>`,z=new Zip();
+ const body='<w:tbl>'+Array.from({length:25},(_,i)=>`<w:tr><w:tc>${p(i+1)}</w:tc><w:tc>${p('Identify the material in reaction '+(i+1))}${p('A) first B) second C) third D) fourth')}</w:tc></w:tr>`).join('')+'</w:tbl>';
+ z.file('word/document.xml',`<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>${body}</w:body></w:document>`);
+ const d={...linked,name:'Chemistry',campus_id:2,common_rm_id:202},info=inspectForDepartment(z.generate({type:'nodebuffer'}),d);assert.equal(info.valid,true);assert.equal(info.questions.length,25);assert.equal(info.questions[24].number,25);
+});
 test('Mathematics combines three departments with equal campuses and all six sets',()=>{
  const pools=[{department_id:8,campus:1},{department_id:13,campus:1},{department_id:35,campus:2}].flatMap(d=>['A','B'].map(set_name=>({...d,set_name,questions:['research','subject'].flatMap(section=>Array.from({length:25},(_,i)=>({section,hash:d.department_id+set_name+section+i})))})));
  const first=choose(pools,false,'A'),seen=new Set(first.map(q=>q.hash));const second=choose(pools.map(p=>({...p,questions:p.questions.filter(q=>!seen.has(q.hash))})),false,'B');

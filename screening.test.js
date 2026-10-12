@@ -4,6 +4,14 @@ const {choose}=require('./papers');
 const q=i=>({text:`What is the objective of research technique ${i}? A) One B) Two C) Three D) Four`});
 test('10 matches accepted and 11 rejected, each new question counted once',()=>{const archive={session:'January 2026',set_name:'A',campus:'Ramapuram',questions:Array.from({length:20},(_,i)=>q(i))};for(const count of [10,11]){const result=screen(Array.from({length:count},(_,i)=>q(i)),[archive,{...archive,set_name:'B'}],'A');assert.equal(result.matched_count,count);assert.equal(result.rejected,count>10);assert.equal(result.matches.length,count*2);assert.equal(result.matches[0].past_question,1);}});
 test('reordered options and changed question numbering do not hide identical stem',()=>assert.equal(similarity('1. What is entropy? A) X B) Y C) Z D) W','9. What is entropy? A) W B) Z C) X D) Y').score,1));
+test('accepted Word option punctuation and Q prefixes do not hide identical stems',()=>{
+ for(const label of ['A:','A-','A.','(A)'])assert.equal(similarity('Q1. What is entropy? '+label+' X B: Y','Question 9. What is entropy? A) Z B) W').score,1);
+});
+test('original numbers and section references do not undercount matching uploaded blocks',()=>{
+ const questions=['research','subject'].flatMap(section=>Array.from({length:6},(_,i)=>({...q(i),number:i+1,section})));
+ const result=screen(questions,[{questions:[{...q(0),number:26,section:'subject'},...Array.from({length:5},(_,i)=>q(i+1))]}],'B');
+ assert.equal(result.matched_count,12);assert.equal(result.rejected,true);assert.equal(result.matches[0].past_question,26);assert.ok(result.matches.some(m=>m.upcoming_question===1&&m.upcoming_section==='subject'));
+});
 test('likely paraphrase detected using equivalent wording and word order',()=>assert.ok(similarity('What is the purpose of random selection of research participants? A) X','What objective does choosing research subjects at random serve? A) X').score>=0.8));
 test('different numerical values and negation are not equated',()=>{assert.equal(similarity(q(1).text,q(2).text).score,0);assert.equal(similarity('Which research technique is reliable?','Which research technique is not reliable?').score,0);});
 test('unrelated stems are not matched just because options match',()=>assert.equal(screen([{text:'What governs electromagnetic wave propagation? A) X B) Y C) Z D) W'}],[{questions:[{text:'Which enzyme catalyzes glucose metabolism? A) X B) Y C) Z D) W'}]}],'A').matched_count,0));

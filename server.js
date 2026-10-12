@@ -1,7 +1,7 @@
 const express=require('express'), multer=require('multer'), sqlite=require('sqlite3'), fs=require('fs'), path=require('path'), crypto=require('crypto');
 const {inspect,choose,generate}=require('./papers');
 const {screen,departmentKey}=require('./screening');
-const {commonFor,inspectForDepartment,validateTemplate}=require('./submission-policy');
+const {commonFor,inspectForDepartment,validateTemplate,placeholder}=require('./submission-policy');
 const {setFromFilename}=require('./public/upload-set');
 const cloudStorage=require('./cloud_storage');
 const {PersistentData,portableName,open}=require('./persistent-data');
@@ -67,7 +67,6 @@ get('/api/storage-status',requireAdmin,async(req,res)=>res.json({
 }));
 function metadata(req){if(req.body.kind==='submission'&&admin(req.user))throw Error('Only HoDs and assigned research coordinators can submit January 2027 question papers.');const d=departments.find(d=>d.id===Number(req.body.department_id));if(!d||!scope(req.user,d))throw Error('Select an authorized department.');if(req.body.kind==='submission'&&!canSubmit(req.user,d))throw Error('Only the assigned HoD or research coordinator can submit this paper.');const {kind,session,set_name}=req.body;if(!['A','B'].includes(set_name))throw Error('Choose Set A or Set B.');if(kind==='archive'){if(!admin(req.user)||!['January 2026','July 2026'].includes(session))throw Error('Only administrators can upload 2026 papers.');}else if(kind!=='submission'||session!=='January 2027')throw Error('Select a valid session.');return d;}
 async function screeningFor(department,info,set) {
- if(!info.valid){const error=Error('The question count or section format does not match the assigned paper type.');error.status=422;throw error;}
  const related=departments.filter(d=>departmentKey(d)===departmentKey(department));
  const rows=await all(persistence.db,"SELECT * FROM papers WHERE kind='archive' ORDER BY created_at DESC,rowid DESC");
  const latest=new Map();for(const p of rows)if(related.some(d=>d.id===p.department_id)){const key=p.department_id+'|'+p.session+'|'+p.set_name;if(!latest.has(key))latest.set(key,p);}
@@ -78,20 +77,28 @@ async function screeningFor(department,info,set) {
   let archiveFile;try{archiveFile=await ensureFileLocal(p.path);}catch(e){if(cloudStorage.enabled){const error=Error('An archived Word file could not be loaded from cloud storage. Please retry before submitting.');error.status=503;throw error;}missing.push({campus:d.campus,session,set:set_name,reason:'Archive could not be read; administrator review is needed'});continue;}
   let parsed;try{parsed=inspectForDepartment(fs.readFileSync(archiveFile),d);}catch(e){missing.push({campus:d.campus,session,set:set_name,reason:'Archive could not be read; administrator review is needed'});continue;}
   if(!parsed.valid)missing.push({campus:d.campus,session,set:set_name,reason:'Archive extraction is incomplete or uses a different historical format; readable questions were still checked'});
-  if(parsed.questions.length)archives.push({...p,campus:d.campus,questions:parsed.questions.filter(q=>!/question\s+starts?\s+here/i.test(q.text))});
+  if(parsed.questions.length)archives.push({...p,campus:d.campus,questions:parsed.questions.filter(q=>!placeholder(q))});
  }
- const report=screen(info.questions,archives,set);
+ const report=screen(info.questions.filter(q=>!placeholder(q)),archives,set);
  report.coverage={complete:missing.length===0,checked_papers:archives.length,checked_questions:archives.reduce((sum,p)=>sum+p.questions.length,0),issues:missing};
- if(missing.length)report.warning='Upload accepted for review; repeat checking used the readable archived questions only. Missing or incomplete archives need administrator review.';
+ if(missing.length)report.warning='Repeat checking used the readable archived questions only. Missing or incomplete archives need administrator review.';
  return report;
 }
 function rejectMatches(report){if(report.rejected){const e=Error('Upload rejected: '+report.matched_count+' questions match the past two sessions. The maximum allowed is 10. Revise the matched questions and upload again.');e.status=422;e.details={screening:report};throw e;}}
+async function assessSubmission(d,buffer,info,set){
+ // Always return the match report for readable questions, even if counts need correction.
+ const report=await screeningFor(d,info,set);
+ report.template=validateTemplate(buffer,d,info);
+ rejectMatches(report);
+ if(!report.template.passed){const e=Error('The question count or sections need correction. See the repeat-check results and detected counts.');e.status=422;e.details={screening:report,template:report.template};throw e;}
+ return report;
+}
 async function store(req,buffer,name){
  const d=metadata(req);if(!name.toLowerCase().endsWith('.docx'))throw Error('Only .docx Word documents are accepted.');
  const filenameSet=setFromFilename(name);
  if(req.body.kind==='submission'&&filenameSet&&filenameSet!==req.body.set_name){const e=Error('This filename identifies Set '+filenameSet+', but Set '+req.body.set_name+' is selected. Select Set '+filenameSet+' and upload again. Your existing papers have not been changed.');e.status=422;e.details={expected_set:filenameSet};throw e;}
  const info=inspectForDepartment(buffer,d);let report=null;
- if(req.body.kind==='submission'){const validation=validateTemplate(buffer,d,info);if(!validation.passed){const e=Error('The paper needs template corrections before it can be submitted.');e.status=422;e.details={template:validation};throw e;}report=await screeningFor(d,info,req.body.set_name);report.template=validation;rejectMatches(report);}
+ if(req.body.kind==='submission')report=await assessSubmission(d,buffer,info,req.body.set_name);
  const id=crypto.randomUUID(),file=path.join(data,'files',id+'.docx');fs.writeFileSync(file,buffer);
  await cloudStorage.putDocument(file,'files/'+id+'.docx');
  try{await run('INSERT INTO papers (id,department_id,campus_id,session,set_name,kind,original_name,path,uploaded_by,counts,valid,reviewed) VALUES (?,?,?,?,?,?,?,?,?,?,?,0)',[id,d.id,d.campus_id,req.body.session,req.body.set_name,req.body.kind,path.basename(name),file,req.user.id,JSON.stringify(info.counts),info.valid?1:0]);
@@ -109,7 +116,7 @@ get('/api/papers/:id/:action',async(req,res)=>{
  if(req.params.action!=='preview')return res.status(404).end();
  const pbuf=fs.readFileSync(localPath),info=inspectForDepartment(pbuf,d);res.json({paper:{...p,path:undefined},screening:JSON.parse((await all(persistence.db,'SELECT report FROM screenings WHERE paper_id=?',[p.id]))[0]?.report||'null'),counts:info.counts,valid:info.valid,questions:info.questions.map(({section,text})=>({section,text})),text:require('./papers').text(new (require('@xmldom/xmldom').DOMParser)().parseFromString(new(require('pizzip'))(pbuf).file('word/document.xml').asText(),'application/xml'))});
 });
-post('/api/papers/:id/review',requireAdmin,async(req,res)=>{const p=(await all(persistence.db,'SELECT * FROM papers WHERE id=?',[req.params.id]))[0];if(!p||p.kind!=='submission'||!p.valid)throw Error('Only valid complete submissions can be approved.');const d=departments.find(d=>d.id===p.department_id),localPath=await ensureFileLocal(p.path),buffer=fs.readFileSync(localPath),info=inspectForDepartment(buffer,d),validation=validateTemplate(buffer,d,info);if(!validation.passed){const e=Error('The paper needs template corrections before approval.');e.status=422;e.details={template:validation};throw e;}const report=await screeningFor(d,info,p.set_name);report.template=validation;rejectMatches(report);await run('INSERT OR REPLACE INTO screenings VALUES (?,?)',[p.id,JSON.stringify(report)]);await run('UPDATE papers SET reviewed=1 WHERE id=?',[p.id]);await persistence.commit();res.json({ok:true});});
+post('/api/papers/:id/review',requireAdmin,async(req,res)=>{const p=(await all(persistence.db,'SELECT * FROM papers WHERE id=?',[req.params.id]))[0];if(!p||p.kind!=='submission')throw Error('Only submissions can be approved.');const d=departments.find(d=>d.id===p.department_id),localPath=await ensureFileLocal(p.path),buffer=fs.readFileSync(localPath),info=inspectForDepartment(buffer,d),report=await assessSubmission(d,buffer,info,p.set_name);await run('INSERT OR REPLACE INTO screenings VALUES (?,?)',[p.id,JSON.stringify(report)]);await run('UPDATE papers SET reviewed=1 WHERE id=?',[p.id]);await persistence.commit();res.json({ok:true});});
 post('/api/templates/:set',requireAdmin,upload.single('file'),async(req,res)=>{if(!['A','B'].includes(req.params.set)||!req.file||!req.file.originalname.toLowerCase().endsWith('.docx'))throw Error('Select a Set A/B Word template.');inspect(req.file.buffer);const file=path.join(data,'files',crypto.randomUUID()+'.docx');fs.writeFileSync(file,req.file.buffer);await cloudStorage.putDocument(file,'files/'+path.basename(file));await run('INSERT OR REPLACE INTO templates VALUES (?,?,?,?)',[req.params.set,req.file.originalname,file,new Date().toISOString()]);await persistence.commit();res.json({ok:true});});
 get('/api/templates/:set',async(req,res)=>{const t=(await all(persistence.db,'SELECT * FROM templates WHERE set_name=?',[req.params.set]))[0];if(!t)return res.status(404).json({error:'Template not uploaded.'});const localPath=await ensureFileLocal(t.path);res.download(localPath,t.original_name);});
 let inventory=[];
@@ -127,9 +134,8 @@ post('/api/generate',requireAdmin,async(req,res)=>{
   const key=d.id+'|'+sourceSet;if(checked.has(key))return checked.get(key);
   const p=latest.get(key);
   if(!p?.reviewed)throw Error('Generation needs approved Set '+sourceSet+' for '+d.campus+' / '+d.institution+' / '+d.name+(d.is_common?' from '+d.coordinator_name:'')+'. Subject submissions can be uploaded while Common RM is pending.');
-  const localPath=await ensureFileLocal(p.path),buffer=fs.readFileSync(localPath),info=inspectForDepartment(buffer,d),validation=validateTemplate(buffer,d,info);
-  if(!validation.passed){const e=Error('Template corrections are required for '+d.name+', Set '+sourceSet+'.');e.status=422;e.details={template:validation};throw e;}
-  const report=await screeningFor(d,info,sourceSet);report.template=validation;rejectMatches(report);
+  const localPath=await ensureFileLocal(p.path),buffer=fs.readFileSync(localPath),info=inspectForDepartment(buffer,d);
+  await assessSubmission(d,buffer,info,sourceSet);
   const pool={...p,path:localPath,campus:p.campus_id,paper_type:info.paper_type,questions:info.questions};checked.set(key,pool);return pool;
  }
  const pools=[];
