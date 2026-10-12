@@ -15,10 +15,10 @@ test('subject-only matrix waits for approved Common RM without changing subject 
  context.state.papers.push(...['A','B'].map(set_name=>({id:'common-'+set_name,department_id:201,set_name,kind:'submission',reviewed:1,counts:'{"research":25,"subject":0}'})));
  assert.ok(vm.runInContext('matrix()',context).includes('data-generate="1"'));
 });
-test('structural corrections retain the match table and omit option-formatting errors',()=>{
+test('structural corrections retain matches and display formatting remarks as advisory',()=>{
  const content={innerHTML:''},dialog={open:false,showModal(){this.open=true;}},context=vm.createContext({escape:s=>String(s??''),$:s=>s==='#previewContent'?content:dialog});
  vm.runInContext(fs.readFileSync(require.resolve('./public/matrix.js'),'utf8'),context);
  context.report={matched_count:1,total_questions:24,limit:10,rejected:false,method:'Local screening',matches:[{upcoming_set:'A',upcoming_question:8,upcoming_section:'subject',upcoming_text:'Uploaded question',past_session:'July 2026',past_campus:'Trichy',past_set:'B',past_question:17,past_text:'Past question',type:'Possible rephrasing',similarity:85}],template:{passed:false,expected:'25 subject',counts:{research:0,subject:24},errors:['Provide 25 subject questions.'],warnings:[],option_errors:[{problem:'missing B'}]}};
- vm.runInContext('showScreening(report,true)',context);assert.ok(dialog.open);assert.ok(content.innerHTML.includes('Question 8')&&content.innerHTML.includes('Question 17')&&content.innerHTML.includes('24 subject'));assert.ok(!content.innerHTML.includes('revise matched')&&!content.innerHTML.includes('missing B'));
+ vm.runInContext('showScreening(report,true)',context);assert.ok(dialog.open);assert.ok(content.innerHTML.includes('Question 8')&&content.innerHTML.includes('Question 17')&&content.innerHTML.includes('24 subject'));assert.ok(!content.innerHTML.includes('revise matched'));assert.ok(content.innerHTML.includes('Formatting remarks · advisory')&&content.innerHTML.includes('do not block')&&content.innerHTML.includes('missing B'));assert.ok(content.innerHTML.indexOf('Past question')<content.innerHTML.indexOf('Formatting remarks'));
  context.report.rejected=true;vm.runInContext('showScreening(report,true)',context);assert.ok(content.innerHTML.includes('Too many repeated questions'));assert.ok(content.innerHTML.includes('Question count and sections'));
 });

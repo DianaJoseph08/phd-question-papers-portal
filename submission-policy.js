@@ -41,7 +41,7 @@ function validateTemplate(buffer,d,info){
  info.questions.forEach((q,i)=>{
   const labels=optionLabels(q);
   const required=['A','B','C','D'],missing=required.filter(l=>!labels.has(l));
-  if(missing.length){const question=q.number||i+1;option_errors.push({question,detected:[...labels].join(', ')||'None',missing:missing.join(', '),problem:'Option label is missing or not recognized',expected:'A) …  B) …  C) …  D) …'});}
+  if(missing.length){const question=q.number||i+1;option_errors.push({question,section:q.section,detected:[...labels].join(', ')||'None',missing:missing.join(', '),problem:'Option label is missing or not recognized',expected:'A) …  B) …  C) …  D) …'});}
  });
  const doc=new DOMParser().parseFromString(new Zip(buffer).file('word/document.xml').asText(),'application/xml');
  const key=Array.from(doc.getElementsByTagName('w:p')).some(p=>isAnswerKeyHeading(text(p).trim()));
