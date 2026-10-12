@@ -1,0 +1,10 @@
+.git/
+node_modules/
+**/node_modules/**
+*.log
+.env
+.env.*
+data/test-runs/
+data/final-archive-import/
+data/latest-archive-import/
+deploy/

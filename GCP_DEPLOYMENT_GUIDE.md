@@ -1,97 +1,42 @@
-﻿# Google Cloud Deployment Guide - PhD Question Papers Portal
-**Target Account**: `sureshscience@gmail.com`  
-**GitHub Repository**: `https://github.com/DianaJoseph08/phd-question-papers-portal.git`  
-**Storage Architecture**: Permanent Google Cloud Storage (GCS) Bucket + Cloud Run
+# Recovering the hosted archive
 
----
+The deployed app uses Cloud Run and a private Cloud Storage bucket. The local recovery library contains 156 current archive papers, four current submissions, and two templates. Older versions are retained as separate database rows.
 
-## 🪣 Permanent Bucket Persistence Architecture
+## Run the repair in Google Cloud Shell
 
-Cloud Run container filesystems are temporary/ephemeral. To ensure **zero data loss** across container restarts, scale-to-zero, and revisions:
-
-1. **Automatic Permanent Bucket Initialization**:
-   - On startup, the application connects to Google Cloud Storage using Application Default Credentials (ADC).
-   - Default Bucket: `${PROJECT_ID}-phd-portal-docs` (or custom name via `GCS_BUCKET_NAME`).
-   - If the bucket does not exist, the app automatically creates it in `asia-south1`.
-2. **Permanent Database Sync (`papers.db`)**:
-   - On container boot: Checks `gs://<BUCKET>/database/papers.db`. If found, restores the latest state into the container.
-   - On any upload, review, template update, or exam generation: Automatically backs up the updated SQLite database to `gs://<BUCKET>/database/papers.db`.
-3. **Permanent Word Document Storage (`.docx`)**:
-   - Every uploaded submission, template, and generated final exam is stored directly in `gs://<BUCKET>/files/<filename>.docx`.
-   - On demand (download or preview): If a document is not present in local container cache, it is automatically fetched directly from the permanent bucket.
-4. **Admissions Database (`phd_admissions.db`)**:
-   - Pre-bundled with all 66 faculty accounts and 49 department mappings.
-
----
-
-## 🚀 One-Click Cloud Run Deployment Instructions
-
-### Step 1: Open Google Cloud Console
-1. Navigate to: **[https://console.cloud.google.com/](https://console.cloud.google.com/)**
-2. Ensure you are signed in with **`sureshscience@gmail.com`**.
-3. Select your active Google Cloud project.
-
-### Step 2: Open Cloud Shell (`>_`)
-Click the **Activate Cloud Shell** icon (`>_`) in the top-right toolbar.
-
-### Step 3: Run the Deployment Command
-
-Paste and run the following in Cloud Shell:
+Pause uploads during this one-time repair. Select the project for service `phd-portal` (project number `873642688907`) and open Cloud Shell. Use a fresh folder so an existing checkout is preserved:
 
 ```bash
-# 1. Clone or pull the repository
-if [ -d "phd-question-papers-portal" ]; then
-  cd phd-question-papers-portal && git pull origin main
-else
-  git clone https://github.com/DianaJoseph08/phd-question-papers-portal.git
-  cd phd-question-papers-portal
-fi
-
-# 2. Deploy directly to Cloud Run
-gcloud run deploy phd-portal \
-  --source . \
-  --region asia-south1 \
-  --allow-unauthenticated \
-  --port 8080 \
-  --memory 1Gi \
-  --cpu 1
+QP_REPAIR_DIR=$(mktemp -d "$HOME/phd-portal-repair.XXXXXX")
+git clone --branch main https://github.com/DianaJoseph08/phd-question-papers-portal.git "$QP_REPAIR_DIR"
+cd "$QP_REPAIR_DIR"
+bash repair-cloud-storage.sh
 ```
 
-> **Note on Permissions**:
-> When prompted: *Do you want to enable the Cloud Build, Artifact Registry, and Cloud Run APIs?* $\rightarrow$ Type `y` and press **Enter**.
->
-> If you wish to specify an exact custom bucket name, you can pass:
-> `--set-env-vars GCS_BUCKET_NAME=my-permanent-bucket-name`
+The script validates the project and recovery files, reads the existing bucket setting and service account, grants that account Storage Object User on this bucket only, and deploys the repaired app. It creates the default bucket only if needed. Do not grant public access to the bucket. Existing app access settings are retained.
 
----
+The deployment uses one instance, concurrency 1 and session affinity. Sign in again after deployment because login sessions are held in memory. Changing the running revision resets sessions, not saved papers.
 
-### Step 4: Verification
+## What the repair does
 
-Cloud Shell will output your live, secure HTTPS URL:
-```text
-Service [phd-portal] revision [phd-portal-00001-xxx] has been deployed and is serving 100 percent of traffic.
-Service URL: https://phd-portal-xxxxxxxxx-el.a.run.app
-```
+- Restores the cloud database before opening SQLite or accepting requests.
+- Adds missing recovery records without overwriting records with the same primary key in the cloud. Newer cloud submissions remain the current versions.
+- Keeps a copy of the pre-recovery cloud database under `recovery/` when merging rows.
+- Ensures all referenced Word files are in the bucket before publishing the restored database.
+- Handles document paths recorded on Windows when the service runs on Linux.
+- Waits for Word uploads and a consistent database snapshot before confirming a save.
+- Uses generation preconditions to reject conflicting updates rather than overwrite another instance's saved data. An affected user receives a retry message.
+- Loads documents from the bucket for downloads, repeat checking and final-paper generation.
+- Stops on cloud startup/permission failures instead of serving an empty temporary database.
 
-### Checking Permanent Storage Sync in Live Logs:
-You can verify that the permanent Cloud Storage bucket is active by viewing live logs in Cloud Shell:
-```bash
-gcloud run services logs tail phd-portal --region asia-south1
-```
-You will see:
-```text
-[Storage] Connected to permanent Cloud Storage bucket: <project-id>-phd-portal-docs
-[Storage] Uploaded to permanent bucket: database/papers.db
-```
+## Verification
 
----
+After deployment, sign in as administrator at the existing app URL. The overview should show at least 156 past papers. Download one January and one July paper. `/api/storage-status` is available to a signed-in administrator and reports storage mode, bucket, record totals and templates.
 
-## 🔒 Optional: Grant Cloud Storage Permissions (If using restricted Service Account)
-If your project uses a restricted default compute service account, grant it Storage Object Admin:
-```bash
-PROJECT_ID=$(gcloud config get-value project)
-PROJECT_NUM=$(gcloud projects describe $PROJECT_ID --format="value(projectNumber)")
-gcloud projects add-iam-policy-binding $PROJECT_ID \
-  --member="serviceAccount:${PROJECT_NUM}-compute@developer.gserviceaccount.com" \
-  --role="roles/storage.admin"
-```
+The script prints recent service logs. A successful start includes `[Storage] Ready:`. If startup fails, keep the error output and resolve the reported bucket permission or missing file; do not replace the cloud database manually.
+
+## Limits
+
+This is a small-portal snapshot design. Each mutation writes a whole SQLite snapshot; use a managed transactional database before increasing scale. Conflicting requests fail for retry, and a network failure after cloud acknowledgement may leave an operation saved even when the client did not receive the response. Check the library before resubmitting after a network error. No software can promise zero data loss under every failure.
+
+`data/papers.db`, `data/phd_admissions.db` and `data/files/` were already included in this repository by the earlier deployment. Keep that repository and its build artifacts private. The repair commits contain code, tests and documentation only; recovery snapshots outside the app folder are not pushed.

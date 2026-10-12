@@ -61,6 +61,14 @@ async function upload(cookie,department,set,buffer,archive=false,name='fixture.d
   for(const [department,cookie,prefix] of [[201,vc,3000],[202,ic,4000]])for(const [index,set] of ['A','B'].entries()){
    const result=await upload(cookie,department,set,fixture(prefix+index,{research:true}));assert.equal(result.status,200,JSON.stringify(result.data));assert.equal((await request(ac,`/papers/${result.data.id}/review`,{})).status,200);
   }
+  // A restored Linux/Windows deployment must not depend on the original PC path.
+  const relocated=new sqlite.Database(path.join(dir,'app','papers.db'));
+  const rows=await new Promise((resolve,reject)=>relocated.all('SELECT id,path FROM papers',(e,r)=>e?reject(e):resolve(r)));
+  for(const row of rows)await run(relocated,'UPDATE papers SET path=? WHERE id=?',['Z:\\retired-machine\\files\\'+path.basename(row.path),row.id]);
+  await close(relocated);
+  assert.equal((await request(ac,`/papers/${archive.data.id}/download`)).status,200);
+  assert.equal((await request(hc,'/storage-status')).status,403);
+  assert.equal((await request(ac,'/storage-status')).data.mode,'local');
   const allHashes=new Set();
   for(const set_name of ['A','B']){
    const result=await request(ac,'/generate',{department_id:1,set_name});assert.equal(result.status,200,JSON.stringify(result.data));assert.deepEqual(result.data.distribution,{Ramapuram:25,Trichy:25});
