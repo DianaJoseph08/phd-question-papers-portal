@@ -38,7 +38,7 @@ app.use((req,res,next)=>{res.set('X-Content-Type-Options','nosniff');res.set('Re
 const upload=multer({storage:multer.memoryStorage(),limits:{fileSize:20*1024*1024,files:1}});
 const {admin,scope,canSubmit}=require('./access');
 let departments=[];
-app.get('/healthz',(req,res)=>res.status(200).json({ok:true}));
+app.get(['/health','/healthz'],(req,res)=>res.status(200).json({ok:true}));
 post('/api/login',async(req,res)=>{
  const key=req.ip, history=(attempts.get(key)||[]).filter(t=>Date.now()-t<900000);attempts.set(key,history);
  if(history.length>=10)return res.status(429).json({error:'Too many login attempts. Try again in 15 minutes.'});

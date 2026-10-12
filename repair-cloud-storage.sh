@@ -44,11 +44,11 @@ gcloud storage buckets add-iam-policy-binding "gs://$QP_BUCKET" \
 gcloud run deploy "$QP_SERVICE" --project="$QP_PROJECT" --region="$QP_REGION" \
   --source=. --port=8080 --memory=1Gi --cpu=1 --concurrency=1 --max=1 --max-instances=1 \
   --session-affinity --timeout=300 \
-  --startup-probe='httpGet.path=/healthz,httpGet.port=8080,periodSeconds=24,timeoutSeconds=5,failureThreshold=10' \
+  --startup-probe='httpGet.path=/health,httpGet.port=8080,periodSeconds=24,timeoutSeconds=5,failureThreshold=10' \
   --update-env-vars="GCS_BUCKET_NAME=$QP_BUCKET,QUESTION_PAPER_DATA_DIR=/tmp/qp-runtime,QUESTION_PAPER_SEED_DIR=/app/data,ADMISSIONS_DB=/app/data/phd_admissions.db"
 
 QP_URL=$(gcloud run services describe "$QP_SERVICE" --project="$QP_PROJECT" --region="$QP_REGION" --format='value(status.url)')
-curl --fail --silent --show-error "$QP_URL/healthz"
+curl --fail --silent --show-error "$QP_URL/health"
 echo
 echo "Open $QP_URL and sign in again. The administrator dashboard should show at least 156 past papers."
 echo "Authenticated storage diagnostics: $QP_URL/api/storage-status"
