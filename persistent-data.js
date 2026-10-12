@@ -73,9 +73,13 @@ class PersistentData{
    await run(this.db,'ATTACH DATABASE ? AS recovery',[seedFile]);
    try{
     // Cloud records win on identical primary keys. Recover missing rows only.
-    for(const table of ['papers','templates','generations','screenings','custom_departments']){
+    for(const table of ['papers','templates','generations','screenings','custom_departments','user_credentials','audit_events']){
      const exists=await all(this.db,"SELECT name FROM recovery.sqlite_master WHERE type='table' AND name=?",[table]);
-     if(exists.length){const result=await run(this.db,`INSERT OR IGNORE INTO main.${table} SELECT * FROM recovery.${table}`);recovered+=result.changes;}
+     if(exists.length){
+      const target=await all(this.db,`PRAGMA main.table_info(${table})`),seedColumns=await all(this.db,`PRAGMA recovery.table_info(${table})`);
+      const columns=target.filter(c=>seedColumns.some(s=>s.name===c.name)).map(c=>'"'+c.name.replaceAll('"','""')+'"').join(',');
+      const result=await run(this.db,`INSERT OR IGNORE INTO main.${table} (${columns}) SELECT ${columns} FROM recovery.${table}`);recovered+=result.changes;
+     }
     }
    }finally{await run(this.db,'DETACH DATABASE recovery');}
   }

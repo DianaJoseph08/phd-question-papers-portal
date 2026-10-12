@@ -6,7 +6,7 @@ Separate app for Ramapuram and Trichy PhD entrance question papers. The admissio
 
 From this folder run `npm start`, then open http://127.0.0.1:3100. Dependencies are available from the copied parent codebase's `node_modules`. To move this app independently, run `npm install` and set `ADMISSIONS_DB` to an admissions database containing the campus, institution, department and user tables.
 
-Use existing Admin, Super Admin or HoD credentials. Assigned research coordinators also have access to their Common RM categories. Other coordinators and deans do not have access. HoDs can access only their own department and campus; they cannot see other HoDs' upcoming papers. Administrators can view all papers. Login sessions expire after eight hours and reset on restart. Restart after changing account permissions in the admissions database.
+Use existing Admin, Super Admin or HoD credentials. Assigned research coordinators also have access to their Common RM categories. Other coordinators, deans and other account holders can sign in to change their portal password only. HoDs can access only their own department and campus; they cannot see other HoDs' upcoming papers. Administrators can view all papers. Login sessions expire after eight hours and reset on restart. Restart after changing account permissions in the admissions database.
 
 The server binds to localhost by default. For a campus deployment, configure HTTPS through a reverse proxy, backups and a protected server. `HOST` and `PORT` configure the listener. Existing account passwords are checked against the copied admissions database using its existing password format.
 
@@ -26,6 +26,16 @@ Administrators upload templates, review submissions and generate papers; they ca
 Suresh and Ruby can open **Departments** (also linked from **Upload papers**) and add a department under an existing campus faculty. The super administrator also has access. Choose an existing HoD account from that campus if the department needs January 2027 submissions. An unassigned department can still receive admin-uploaded January and July 2026 archives. An assigned HoD retains access to their existing department and gains access to the new one.
 
 The new department appears in the archive/upload dropdowns, library filters and generation matrix. Common RM requirements follow its campus and faculty automatically. Use the same department name and faculty category across campuses to generate a shared paper; a department present at one campus uses that campus's two sets. Duplicate department names within the same faculty are refused. New department records and HoD assignments are stored in the question-paper database and restored from the storage bucket on restart; the original admissions accounts/database remain unchanged.
+
+## Accounts and activity log
+
+Every account holder has a **Change password** page. The username is immutable. A change requires the current password and a confirmed new password of 12–128 characters. The new password is stored as a salted scrypt hash in the question-paper database; the admissions database remains read-only. Subsequent portal logins use the changed password. A password change invalidates all other sessions, including sessions on another app instance.
+
+Administrators have **User accounts** and **Activity log** pages. The account directory shows names, usernames, email addresses, campus, departments, roles and password status. Passwords and password hashes are never returned to the browser. An administrator can reset an account to a temporary password after confirming their own password. The user must change that temporary password before accessing papers. Only a super administrator can reset another super administrator's password.
+
+The activity log records the actor, time in IST and relevant document/department details for uploads, replacements, rejected submissions, approvals, generation, department additions, template uploads, sign-ins/sign-outs and password changes/resets. It supports search, action filtering and pagination. Existing paper uploads and custom department additions receive historical entries using the recorded uploader and original timestamp. Actions before logging was introduced can only be reconstructed when that information was saved; passwords are never recorded in logs.
+
+Administrators can **Remove** a paper from the library with a mandatory reason. It is then excluded from screening and generation, and an older version does not automatically become current. This is a recorded soft removal: the document and metadata remain stored for recovery/history. Other users cannot remove papers. Password changes, logs and removal metadata are included in the cloud database snapshot and preserved on restart/redeployment.
 
 ## Supported Word format and limitations
 

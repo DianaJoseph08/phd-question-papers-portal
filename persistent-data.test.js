@@ -21,6 +21,8 @@ async function schema(db){
  await run(db,'CREATE TABLE IF NOT EXISTS generations(id TEXT PRIMARY KEY,path TEXT)');
  await run(db,'CREATE TABLE IF NOT EXISTS screenings(paper_id TEXT PRIMARY KEY,report TEXT)');
  await run(db,'CREATE TABLE IF NOT EXISTS custom_departments(id INTEGER PRIMARY KEY,name TEXT,institution_id INTEGER,hod_user_id INTEGER,created_by INTEGER,created_at TEXT)');
+ await run(db,'CREATE TABLE IF NOT EXISTS user_credentials(user_id INTEGER PRIMARY KEY,password_hash TEXT,version INTEGER,must_change_password INTEGER,updated_at TEXT,changed_by INTEGER)');
+ await run(db,'CREATE TABLE IF NOT EXISTS audit_events(id TEXT PRIMARY KEY,actor_id INTEGER,actor_username TEXT,actor_name TEXT,action TEXT,target_type TEXT,target_id TEXT,details TEXT,created_at TEXT)');
 }
 async function setup(t){
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'qp-storage-test-')),seed=path.join(dir,'seed');
@@ -41,6 +43,15 @@ test('first startup persists seed files and rows; a fresh container restores the
  await a.use(async()=>{await run(a.db,'INSERT INTO papers VALUES (?,?,?)',['new','new.docx','uploaded']);await run(a.db,'INSERT INTO custom_departments (id,name,institution_id,hod_user_id,created_by) VALUES (?,?,?,?,?)',[1000,'New Department',1,10,2]);await a.commit();});
  const b=await instance('restart');assert.equal((await all(b.db,'SELECT * FROM papers')).length,2);
  assert.deepEqual((await all(b.db,'SELECT id,name,hod_user_id FROM custom_departments'))[0],{id:1000,name:'New Department',hod_user_id:10});
+});
+test('recovery handles added columns and preserves removal, password and audit records',async t=>{
+ const {instance}=await setup(t);const a=await instance('first');await run(a.db,'ALTER TABLE papers ADD COLUMN deleted_at TEXT');await a.recoverSeed();
+ await a.use(async()=>{
+  await run(a.db,"UPDATE papers SET deleted_at='2026-10-12T00:00:00Z' WHERE id='past'");
+  await run(a.db,"INSERT INTO user_credentials VALUES (10,'opaque-hash',2,0,'2026-10-12',10)");
+  await run(a.db,"INSERT INTO audit_events VALUES ('event',10,'hod','HoD','account.password_changed','account','10','{}','2026-10-12')");await a.commit();
+ });
+ const b=await instance('restart');await b.recoverSeed();assert.ok((await all(b.db,"SELECT deleted_at FROM papers WHERE id='past'"))[0].deleted_at);assert.equal((await all(b.db,'SELECT version FROM user_credentials'))[0].version,2);assert.equal((await all(b.db,'SELECT action FROM audit_events'))[0].action,'account.password_changed');
 });
 test('an empty remote database recovers the archive and keeps a backup',async t=>{
  const {cloud,instance}=await setup(t);const a=await instance('first');

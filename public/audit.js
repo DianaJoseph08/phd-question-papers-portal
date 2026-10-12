@@ -1,0 +1,16 @@
+const activityNames={'paper.uploaded':'Paper uploaded','paper.replaced':'Paper replaced','paper.imported':'Past upload (imported history)','paper.rejected':'Upload rejected','paper.removed':'Paper removed','paper.approved':'Paper approved','paper.generated':'Paper generated','department.added':'Department added','template.uploaded':'Template uploaded','account.signed_in':'Signed in','account.signed_out':'Signed out','account.password_changed':'Password changed','account.password_reset':'Password reset'};
+function auditPage(){return `<section class="panel"><h2>Activity log</h2><p>Administrator access only. Times are shown in Indian Standard Time. Historical upload entries use the original saved timestamps; earlier removals and password changes were not recorded.</p><div class="filters"><input id="auditSearch" placeholder="User, document or department"><select id="auditAction"><option value="">All actions</option>${Object.entries(activityNames).map(([value,label])=>`<option value="${value}">${label}</option>`).join('')}</select></div><div id="auditRows">Loading activity…</div><div class="filters"><button id="auditPrevious">Previous</button><span id="auditCount"></span><button id="auditNext">Next</button></div></section>`;}
+function auditDetails(event){
+ const labels={filename:'Document',department:'Department',department_id:'Department ID',campus:'Campus',campus_id:'Campus ID',institution:'Faculty',session:'Session',set:'Set',kind:'Paper type',reason:'Reason',matched_questions:'Matched questions',username:'Account',hod_user_id:'HoD account ID',previous_id:'Previous upload',distribution:'Campus contribution',historical:'Imported history'};
+ return Object.entries(event.details||{}).filter(([,v])=>v!==null&&v!==undefined).map(([k,v])=>`<div><strong>${escape(labels[k]||k)}:</strong> ${escape(typeof v==='object'?JSON.stringify(v):v)}</div>`).join('');
+}
+function bindAudit(){
+ if(!$('#auditRows'))return;
+ let offset=0,timer,requestId=0;const limit=50;
+ async function load(){const id=++requestId;try{const q=new URLSearchParams({offset,limit,search:$('#auditSearch').value,action:$('#auditAction').value});const result=await api('/audit?'+q);if(id!==requestId||!$('#auditRows'))return;
+  $('#auditRows').innerHTML=result.events.length?`<div class="table-wrap"><table><thead><tr><th>When (IST)</th><th>By</th><th>Action</th><th>Details</th></tr></thead><tbody>${result.events.map(e=>`<tr><td>${officeDate(e.created_at)}</td><td>${escape(e.actor_name)}<br><small>${escape(e.actor_username)}</small></td><td>${escape(activityNames[e.action]||e.action)}</td><td>${auditDetails(e)}</td></tr>`).join('')}</tbody></table></div>`:'<p>No matching activity.</p>';
+  $('#auditCount').textContent=result.total?`${offset+1}–${offset+result.events.length} of ${result.total}`:'0 events';$('#auditPrevious').disabled=offset===0;$('#auditNext').disabled=offset+limit>=result.total;
+ }catch(error){message(error.message);}}
+ function filter(){clearTimeout(timer);timer=setTimeout(()=>{offset=0;if($('#auditRows'))load();},250);}
+ $('#auditSearch').oninput=filter;$('#auditAction').onchange=filter;$('#auditPrevious').onclick=()=>{offset=Math.max(0,offset-limit);load();};$('#auditNext').onclick=()=>{offset+=limit;load();};load();
+}

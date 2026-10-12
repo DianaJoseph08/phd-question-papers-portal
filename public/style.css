@@ -2,3 +2,5 @@
 
 .matrix-panel{background:linear-gradient(115deg,#ebe5fb,#edf4fa 60%,#dcf3fc);border-radius:14px;padding:24px;margin-bottom:25px}.matrix-panel h2{font-size:28px;margin:0}.matrix{background:#ffffff75;border:1px solid white;border-radius:12px;overflow:hidden;min-width:1000px}.matrix th{background:#f5f7fb;color:#173d6a}.matrix td{border-bottom:1px solid white;padding:16px 12px}.matrix td:nth-child(2){min-width:230px}.matrix td:last-child{min-width:190px}.matrix button{background:#6945d7}.matrix button.badge.good{background:#e0f1e8}.matrix button.badge.warn{background:#fff1da}.matrix button:disabled{background:#a7b4c6;cursor:default}.matrix a{font-size:11px;color:#4b3b9e}.na{font-style:italic;color:#8b97aa}.screening td{vertical-align:top;white-space:pre-wrap;min-width:110px}.screening td:nth-child(2),.screening td:nth-child(4){min-width:220px}.screening table{font-size:12px}.screening h3{color:#913c29}
 .campus-source+.campus-source{border-top:1px solid #d4ddeb;margin-top:12px;padding-top:12px}.campus-source small{display:inline-block;max-width:190px}
+
+aside{overflow-y:auto}.danger{background:#a43c3c}

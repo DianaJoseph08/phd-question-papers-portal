@@ -6,7 +6,7 @@ const sourceFile=path.join(dir,'admissions.db');let server,base;
 const run=(db,sql,args=[])=>new Promise((resolve,reject)=>db.run(sql,args,e=>e?reject(e):resolve()));
 const close=db=>new Promise((resolve,reject)=>db.close(e=>e?reject(e):resolve()));
 async function request(cookie,url,body){const r=await fetch(base+'/api'+url,{method:body?'POST':'GET',headers:{Cookie:cookie,...(body instanceof FormData?{}:{'Content-Type':'application/json'})},body:body?(body instanceof FormData?body:JSON.stringify(body)):undefined});return {status:r.status,data:(r.headers.get('content-type')||'').includes('json')?await r.json():Buffer.from(await r.arrayBuffer()),cookie:r.headers.get('set-cookie')?.split(';')[0]};}
-async function login(username){const r=await request('','/login',{username,password:'fixture-password'});assert.equal(r.status,200,JSON.stringify(r.data));return r.cookie;}
+async function login(username,password='fixture-password'){const r=await request('','/login',{username,password});assert.equal(r.status,200,JSON.stringify(r.data));return r.cookie;}
 function fixture(prefix,{research=false,full=false,repeat=0,researchRepeat=repeat,invalid=false,count=25,rephrased=false,heading}={}){
  const p=t=>`<w:p><w:r><w:t>${t}</w:t></w:r></w:p>`;let body='';
  for(const section of full?['Research Methodology','Subject-Specific Questions']:[research?'Research Methodology':heading||'Subject-Specific Questions']){
@@ -25,11 +25,11 @@ async function startServer(port){
 (async()=>{
  try{
   const db=new sqlite.Database(sourceFile);
-  await run(db,'CREATE TABLE campuses(id INTEGER,name TEXT)');await run(db,'CREATE TABLE institutions(id INTEGER,name TEXT,campus_id INTEGER)');await run(db,'CREATE TABLE departments(id INTEGER,name TEXT,institution_id INTEGER)');await run(db,'CREATE TABLE users(id INTEGER,username TEXT,password TEXT,name TEXT,role TEXT,campus_id INTEGER,department_id INTEGER)');
+  await run(db,'CREATE TABLE campuses(id INTEGER,name TEXT)');await run(db,'CREATE TABLE institutions(id INTEGER,name TEXT,campus_id INTEGER)');await run(db,'CREATE TABLE departments(id INTEGER,name TEXT,institution_id INTEGER)');await run(db,'CREATE TABLE users(id INTEGER,username TEXT,password TEXT,name TEXT,role TEXT,campus_id INTEGER,department_id INTEGER,email TEXT)');
   for(const row of [[1,'Ramapuram'],[2,'Trichy']])await run(db,'INSERT INTO campuses VALUES (?,?)',row);
   for(const row of [[1,'Faculty of Engineering and Technology',1],[2,'College of Engineering and Technology',2],[3,'Faculty of Science and Humanities',1],[4,'College of Science and Humanities',2],[5,'College of Allied Health Sciences',2],[6,'College of Occupational Therapy',2],[7,'College of Management',2]])await run(db,'INSERT INTO institutions VALUES (?,?,?)',row);
-  for(const row of [[1,'Mechanical Engineering',1],[30,'Mechanical Engineering',2],[13,'Mathematics',3],[38,'Commerce',4],[44,'Medical Imaging Technology',5],[43,'Occupational Therapy',6],[102,'Management Studies',7]])await run(db,'INSERT INTO departments VALUES (?,?,?)',row);
-  for(const u of [[1,'admin','admin',1,null],[2,'suresh','admin',1,null],[3,'ruby','admin',2,null],[5,'vani','coordinator',1,null],[8,'infant','coordinator',2,null],[10,'rmp-hod','hod',1,1],[11,'try-hod','hod',2,30],[12,'math-hod','hod',1,13],[13,'commerce-hod','hod',2,38],[14,'health-hod','hod',2,44],[15,'ot-hod','hod',2,43],[16,'management-hod','hod',2,102]])await run(db,'INSERT INTO users VALUES (?,?,?,?,?,?,?)',[u[0],u[1],'fixture-password',u[1],...u.slice(2)]);
+  for(const row of [[1,'Mechanical Engineering',1],[30,'Mechanical Engineering',2],[13,'Mathematics',3],[14,'Cybersecurity',1],[38,'Commerce',4],[44,'Medical Imaging Technology',5],[43,'Occupational Therapy',6],[102,'Management Studies',7]])await run(db,'INSERT INTO departments VALUES (?,?,?)',row);
+  for(const u of [[1,'admin','admin',1,null],[2,'suresh','admin',1,null],[3,'ruby','admin',2,null],[5,'vani','coordinator',1,null],[8,'infant','coordinator',2,null],[10,'rmp-hod','hod',1,1],[11,'try-hod','hod',2,30],[12,'math-hod','hod',1,13],[13,'commerce-hod','hod',2,38],[14,'health-hod','hod',2,44],[15,'ot-hod','hod',2,43],[16,'management-hod','hod',2,102],[17,'dean','dean',1,null],[18,'other-coordinator','coordinator',1,null],[19,'cyber-hod','hod',1,14],[20,'super','super_admin',null,null]])await run(db,'INSERT INTO users VALUES (?,?,?,?,?,?,?,?)',[u[0],u[1],'fixture-password',u[1],...u.slice(2),u[1]+'@example.test']);
   await close(db);
   const accountSnapshot=fs.readFileSync(sourceFile);
   // Pick an available local test port, leaving the real application untouched.
@@ -140,12 +140,57 @@ async function startServer(port){
    const repeated=await upload(hodCookie,d,'A',fixture(prefix,{repeat:11}));assert.equal(repeated.status,422);assert.equal(repeated.data.screening.matched_count,11);
    for(const [index,set] of ['A','B'].entries()){const fresh=await upload(hodCookie,d,set,fixture(prefix+index));assert.equal(fresh.status,200);assert.equal((await request(sc,`/papers/${fresh.data.id}/review`,{})).status,200);}
   }
-  const newFinal=await request(rc,'/generate',{department_id:rmpId,set_name:'A'});assert.equal(newFinal.status,200,JSON.stringify(newFinal.data));assert.deepEqual(newFinal.data.distribution,{Ramapuram:25,Trichy:25});
+  const civilHashes=new Set();
+  for(const set_name of ['A','B']){
+   const newFinal=await request(rc,'/generate',{department_id:rmpId,set_name});assert.equal(newFinal.status,200,JSON.stringify(newFinal.data));assert.deepEqual(newFinal.data.distribution,{Ramapuram:25,Trichy:25});
+   const manifest=(await request(rc,`/generations/${newFinal.data.id}/manifest`)).data;
+   for(const q of manifest.questions){assert.ok(!civilHashes.has(q.hash));civilHashes.add(q.hash);}
+   for(const d of [rmpId,tryId,201,202])for(const s of ['A','B'])assert.ok(manifest.questions.some(q=>q.department_id===d&&q.source_set===s));
+  }
+  // A new department on the other campus must group with the existing admissions department.
+  const newCyber=await request(rc,'/departments',{name:'Cybersecurity',institution_id:2,hod_user_id:11});assert.equal(newCyber.status,201);const cyberId=newCyber.data.department.id,cyber=await login('cyber-hod');
+  for(const [d,cookie,prefix] of [[14,cyber,70000],[cyberId,tc,80000]])for(const [index,set] of ['A','B'].entries()){
+   const fresh=await upload(cookie,d,set,fixture(prefix+index));assert.equal(fresh.status,200);assert.equal((await request(sc,`/papers/${fresh.data.id}/review`,{})).status,200);
+  }
+  for(const set_name of ['A','B']){
+   const final=await request(sc,'/generate',{department_id:14,set_name});assert.equal(final.status,200,JSON.stringify(final.data));assert.deepEqual(final.data.distribution,{Ramapuram:25,Trichy:25});
+   const manifest=(await request(sc,`/generations/${final.data.id}/manifest`)).data;
+   for(const d of [14,cyberId,201,202])for(const s of ['A','B'])assert.ok(manifest.questions.some(q=>q.department_id===d&&q.source_set===s));
+  }
+  // Remove the latest archive without resurrecting the previous version or using it in screening.
+  const removed=await upload(rc,unassigned.data.department.id,'A',fixture(202),true,'latest-archive.docx');assert.equal(removed.status,200);
+  assert.equal((await request(tc,`/papers/${removed.data.id}/remove`,{reason:'Wrong assignment'})).status,403);
+  assert.equal((await request(rc,`/papers/${removed.data.id}/remove`,{reason:'x'})).status,400);
+  assert.equal((await request(rc,`/papers/${removed.data.id}/remove`,{reason:'Incorrect test archive'})).status,200);
+  assert.ok(!(await request(rc,'/state')).data.papers.some(p=>p.department_id===unassigned.data.department.id));assert.equal((await request(rc,`/papers/${removed.data.id}/download`)).status,404);
+  const removedSubmission=(await request(cyber,'/state')).data.papers.find(p=>p.department_id===14&&p.set_name==='B');
+  assert.equal((await request(sc,`/papers/${removedSubmission.id}/remove`,{reason:'Invalid source'})).status,200);assert.equal((await request(sc,'/generate',{department_id:14,set_name:'A'})).status,400);
+  // All account holders may change passwords, but usernames and private admin pages remain protected.
+  for(const cookie of [hc,tc,vc,ic,await login('dean'),await login('other-coordinator')])for(const url of ['/users','/audit'])assert.equal((await request(cookie,url)).status,403);
+  for(const username of ['dean','other-coordinator']){
+   const cookie=await login(username),s=(await request(cookie,'/state')).data;assert.equal(s.can_use_papers,false);assert.deepEqual(s.templates,[]);assert.deepEqual(s.papers,[]);assert.equal((await request(cookie,'/templates/A')).status,403);
+   assert.equal((await request(cookie,'/password',{current_password:'fixture-password',new_password:'new-private-password',confirm_password:'new-private-password'})).status,200);assert.equal((await request(cookie,'/state')).status,200);
+  }
+  const directory=(await request(sc,'/users')).data.users;assert.ok(directory.every(u=>!('password' in u)&&!('password_hash' in u)));assert.equal(directory.find(u=>u.id===10).email,'rmp-hod@example.test');
+  const otherHodSession=await login('rmp-hod'),hodPassword='new-rmp-password',change={current_password:'fixture-password',new_password:hodPassword,confirm_password:hodPassword};
+  assert.equal((await request(hc,'/password',{...change,username:'replacement'})).status,400);assert.equal((await request(hc,'/password',{...change,current_password:'incorrect'})).status,400);
+  assert.equal((await request(hc,'/password',change)).status,200);assert.equal((await request(hc,'/state')).status,200);assert.equal((await request(otherHodSession,'/state')).status,401);
+  assert.equal((await request('','/login',{username:'rmp-hod',password:'fixture-password'})).status,401);await login('rmp-hod',hodPassword);
+  const reset={current_password:'fixture-password',new_password:'temporary-try-password',confirm_password:'temporary-try-password'};
+  assert.equal((await request(sc,'/users/20/reset-password',reset)).status,403);assert.equal((await request(hc,'/users/11/reset-password',reset)).status,403);assert.equal((await request(sc,'/users/11/reset-password',{...reset,current_password:'incorrect'})).status,400);
+  assert.equal((await request(sc,'/users/11/reset-password',reset)).status,200);assert.equal((await request(tc,'/state')).status,401);
+  const temporary=await login('try-hod',reset.new_password),temporaryState=(await request(temporary,'/state')).data;assert.equal(temporaryState.user.must_change_password,true);assert.deepEqual(temporaryState.papers,[]);assert.deepEqual(temporaryState.templates,[]);assert.equal((await upload(temporary,tryId,'A',fixture(90000))).status,403);assert.equal((await request(temporary,'/templates/A')).status,403);
+  const tryPassword='new-try-password';assert.equal((await request(temporary,'/password',{current_password:reset.new_password,new_password:tryPassword,confirm_password:tryPassword})).status,200);assert.equal((await request(temporary,'/state')).data.user.must_change_password,false);
+  const events=(await request(sc,'/audit?limit=100')).data;assert.ok(events.total>events.events.length);assert.ok(events.events.some(e=>e.action==='paper.removed'&&e.actor_username==='ruby'&&e.details.reason==='Incorrect test archive'));
+  for(const action of ['paper.uploaded','paper.replaced','paper.rejected','paper.approved','paper.generated','department.added','account.password_changed','account.password_reset'])assert.ok((await request(rc,'/audit?action='+action)).data.total>0,action);
+  const uploadLogs=(await request(sc,'/audit?search=latest-archive.docx')).data.events;assert.ok(uploadLogs.some(e=>e.action==='paper.replaced'&&e.actor_username==='ruby'&&e.created_at));
+  for(const secret of [hodPassword,tryPassword,reset.new_password,'fixture-password'])assert.ok(!JSON.stringify(events).includes(secret));
+  assert.equal((await request(sc,'/users')).data.users.find(u=>u.id===11).password_status,'Changed securely');
   // A restart must retain new department assignments and uploaded archive metadata.
   await new Promise(resolve=>{server.once('exit',resolve);server.kill();});await startServer(port);
-  const restarted=(await request(await login('ruby'),'/state')).data;assert.equal(restarted.departments.filter(d=>d.is_custom).length,3);assert.ok(restarted.papers.some(p=>p.department_id===rmpId&&p.kind==='archive'));assert.ok((await request(await login('rmp-hod'),'/state')).data.departments.some(d=>d.id===rmpId));assert.deepEqual(fs.readFileSync(sourceFile),accountSnapshot,'Admissions accounts must remain unchanged');
-  console.log('Integration passed: both-campus screening, all Trichy faculties and Common RM, match reports, role isolation, Suresh/Ruby department creation, archive upload, HoD assignment, duplicate/input protection, restart persistence and equal-campus generation. Real app data was not changed.');
-  if(process.argv.includes('--ui')){console.log('UI fixture available: '+base+' (use rmp-hod / fixture-password). Send a newline to end.');await new Promise(resolve=>process.stdin.once('data',resolve));}
+  const restartedAdmin=await login('ruby'),restarted=(await request(restartedAdmin,'/state')).data;assert.equal(restarted.departments.filter(d=>d.is_custom).length,4);assert.ok(restarted.papers.some(p=>p.department_id===rmpId&&p.kind==='archive'));assert.ok(!restarted.papers.some(p=>p.department_id===unassigned.data.department.id));assert.ok((await request(await login('rmp-hod',hodPassword),'/state')).data.departments.some(d=>d.id===rmpId));await login('try-hod',tryPassword);assert.ok((await request(restartedAdmin,'/audit?action=account.password_reset')).data.total>0);assert.equal((await request(restartedAdmin,'/users')).data.users.find(u=>u.id===10).password_status,'Changed securely');assert.deepEqual(fs.readFileSync(sourceFile),accountSnapshot,'Admissions accounts must remain unchanged');
+  console.log('Integration passed: both-campus screening and generation, new/existing department grouping, admin-only activity/account pages, paper removal, password changes/resets, session revocation, immutable usernames, restart persistence and unchanged admissions database. Real app data was not changed.');
+  if(process.argv.includes('--ui')){console.log('UI fixture available: '+base+' (use ruby / fixture-password). Send a newline to end.');await new Promise(resolve=>process.stdin.once('data',resolve));}
  }finally{
   if(server&&server.exitCode===null)await new Promise(resolve=>{server.once('exit',resolve);server.kill();});
   const resolved=path.resolve(dir);if(!resolved.startsWith(parent+path.sep))throw Error('Unsafe test cleanup path');fs.rmSync(resolved,{recursive:true,force:true});
