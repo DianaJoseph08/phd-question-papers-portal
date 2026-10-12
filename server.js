@@ -5,6 +5,7 @@ const {commonFor,inspectForDepartment,validateTemplate,placeholder}=require('./s
 const {setFromFilename}=require('./public/upload-set');
 const cloudStorage=require('./cloud_storage');
 const {PersistentData,portableName,open}=require('./persistent-data');
+const {DepartmentRegistry}=require('./departments');
 const root=__dirname, seed=process.env.QUESTION_PAPER_SEED_DIR||path.join(root,'data'), data=process.env.QUESTION_PAPER_DATA_DIR||(cloudStorage.enabled?path.join(require('os').tmpdir(),'qp-runtime'):path.join(root,'data')), parent=path.dirname(root);
 const persistence=new PersistentData({data,seed,cloud:cloudStorage});
 fs.mkdirSync(path.join(data,'files'),{recursive:true});
@@ -30,14 +31,14 @@ let source;
 const all=(d,sql,args=[])=>new Promise((resolve,reject)=>d.all(sql,args,(e,r)=>e?reject(e):resolve(r)));
 const run=(sql,args=[])=>new Promise((resolve,reject)=>persistence.db.run(sql,args,function(e){e?reject(e):resolve(this)}));
 const app=express(), sessions=new Map(), attempts=new Map();
-const route=method=>(url,...handlers)=>{const action=handlers.pop();app[method](url,...handlers,(req,res,next)=>persistence.use(()=>action(req,res)).catch(next));};
+const route=method=>(url,...handlers)=>{const action=handlers.pop();app[method](url,...handlers,(req,res,next)=>persistence.use(async()=>{departments=await registry.load();return action(req,res);}).catch(next));};
 const get=route('get'),post=route('post');
 if(process.env.TRUST_PROXY==='1'||process.env.TRUST_PROXY==='true'||process.env.NODE_ENV==='production')app.set('trust proxy',1);
 app.disable('x-powered-by');app.use(express.json({limit:'1mb'}));
 app.use((req,res,next)=>{res.set('X-Content-Type-Options','nosniff');res.set('Referrer-Policy','same-origin');res.set('Cache-Control','no-store');res.set('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; frame-ancestors 'none'; form-action 'self'");if(!['GET','HEAD','OPTIONS'].includes(req.method)&&req.get('origin')&&req.get('origin')!==`${req.protocol}://${req.get('host')}`)return res.status(403).json({error:'Cross-origin request refused.'});next();});
 const upload=multer({storage:multer.memoryStorage(),limits:{fileSize:20*1024*1024,files:1}});
-const {admin,scope,canSubmit}=require('./access');
-let departments=[];
+const {admin,scope,canSubmit,canManageDepartments}=require('./access');
+let departments=[],registry;
 app.get(['/health','/healthz'],(req,res)=>res.status(200).json({ok:true}));
 post('/api/login',async(req,res)=>{
  const key=req.ip, history=(attempts.get(key)||[]).filter(t=>Date.now()-t<900000);attempts.set(key,history);
@@ -57,9 +58,13 @@ get('/api/state',async(req,res)=>{
    AND (newer.created_at>p.created_at OR (newer.created_at=p.created_at AND newer.rowid>p.rowid))
  ) ORDER BY p.created_at DESC,p.rowid DESC`);
  const visible=rows.filter(p=>scope(req.user,departments.find(d=>d.id===p.department_id)||{})&&(admin(req.user)||p.kind==='archive'||p.uploaded_by===req.user.id||req.user.role==='coordinator'));
- res.json({user:req.user,departments:admin(req.user)?departments:departments.filter(d=>scope(req.user,d)),papers:visible.map(({path:ignored,...p})=>p),templates:await all(persistence.db,'SELECT set_name,original_name,updated_at FROM templates'),generations:admin(req.user)?await all(persistence.db,'SELECT id,department_name,set_name,distribution,created_at FROM generations ORDER BY created_at DESC'):[]});
+ res.json({user:req.user,can_manage_departments:canManageDepartments(req.user),institutions:canManageDepartments(req.user)?registry.institutions:[],hod_accounts:canManageDepartments(req.user)?registry.hods:[],departments:admin(req.user)?departments:departments.filter(d=>scope(req.user,d)),papers:visible.map(({path:ignored,...p})=>p),templates:await all(persistence.db,'SELECT set_name,original_name,updated_at FROM templates'),generations:admin(req.user)?await all(persistence.db,'SELECT id,department_name,set_name,distribution,created_at FROM generations ORDER BY created_at DESC'):[]});
 });
 function requireAdmin(req,res,next){if(!admin(req.user))return res.status(403).json({error:'Administrator access required.'});next();}
+post('/api/departments',(req,res,next)=>{if(!canManageDepartments(req.user))return res.status(403).json({error:'Only Suresh, Ruby or the super administrator can add departments.'});next();},async(req,res)=>{
+ const department=await registry.create(req.body,req.user.id);
+ await persistence.commit();departments=await registry.load();res.status(201).json({department});
+});
 get('/api/storage-status',requireAdmin,async(req,res)=>res.json({
  mode:cloudStorage.enabled?'cloud':'local',bucket:cloudStorage.BUCKET_NAME||null,
  records:await all(persistence.db,'SELECT kind,session,COUNT(*) count FROM papers GROUP BY kind,session'),
@@ -176,7 +181,9 @@ async function start(){
   const coordinators=await all(source,"SELECT id,username,name,campus_id FROM users WHERE role='coordinator' AND username IN ('vani','infant')");
   const commonAssignments=[{id:201,campus_id:1,campus:'Ramapuram',faculty_code:'FET',institution:'Faculty of Engineering and Technology',username:'vani'},{id:202,campus_id:2,campus:'Trichy',faculty_code:'FET',institution:'College of Engineering and Technology',username:'infant'},{id:-203,campus_id:2,campus:'Trichy',faculty_code:'FSH',institution:'College of Science and Humanities',username:'infant'},{id:-204,campus_id:2,campus:'Trichy',faculty_code:'FMHS',institution:'Faculty of Medical and Health Sciences',username:'infant'}];
   for(const assignment of commonAssignments){const coordinator=coordinators.find(u=>u.username===assignment.username&&u.campus_id===assignment.campus_id);if(!coordinator)throw Error('Assigned research coordinator account not found: '+assignment.username);const record={...assignment,name:'Common Research Methodology ('+assignment.faculty_code+')',is_common:true,coordinator_id:coordinator.id,coordinator_name:coordinator.name};const index=departments.findIndex(d=>d.id===record.id);if(index>=0)departments[index]=record;else departments.push(record);}
-  for(const d of departments){d.common_rm_id=commonFor(d);d.submission_format=d.is_common?'25 RM':d.common_rm_id?'25 subject':'25 RM + 25 subject';}
+  const institutions=await all(source,"SELECT i.id,i.name,i.campus_id,c.name campus FROM institutions i JOIN campuses c ON c.id=i.campus_id WHERE i.campus_id IN (1,2) AND LOWER(i.name) NOT LIKE '%research office%' ORDER BY c.id,i.name");
+  const hods=await all(source,"SELECT id,username,name,campus_id,department_id FROM users WHERE role='hod' ORDER BY campus_id,name");
+  registry=new DepartmentRegistry({db:()=>persistence.db,base:departments,institutions,hods});departments=await registry.load();
   for(const set of ['A','B']){if(!(await all(persistence.db,'SELECT * FROM templates WHERE set_name=?',[set])).length){const original=path.join(parent,'Question_Paper_Setting',`Rmp_Department name_Jan_2027_QP_Set_${set}.docx`);if(fs.existsSync(original)){const dest=path.join(data,'files',`initial-template-${set}.docx`);fs.copyFileSync(original,dest);await run('INSERT INTO templates VALUES (?,?,?,?)',[set,path.basename(original),dest,new Date().toISOString()]);}}}
   if(fs.existsSync(path.join(parent,'Question Papers 2026')))scan(path.join(parent,'Question Papers 2026'));
  const recovery=await persistence.recoverSeed();

@@ -16,6 +16,12 @@ function fixture(prefix,{research=false,full=false,repeat=0,researchRepeat=repea
  body+=p('Answer Key')+p('1 A');const z=new Zip();z.file('word/document.xml',`<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>${body}</w:body></w:document>`);return z.generate({type:'nodebuffer'});
 }
 async function upload(cookie,department,set,buffer,archive=false,name='fixture.docx'){const f=new FormData();for(const [k,v] of Object.entries({department_id:department,set_name:set,session:archive?'January 2026':'January 2027',kind:archive?'archive':'submission'}))f.set(k,v);f.set('file',new Blob([buffer]),name);return request(cookie,'/papers',f);}
+async function startServer(port){
+ base='http://127.0.0.1:'+port;
+ server=spawn(process.execPath,['server.js'],{cwd:__dirname,env:{...process.env,PORT:String(port),HOST:'127.0.0.1',ADMISSIONS_DB:sourceFile,QUESTION_PAPER_DATA_DIR:path.join(dir,'app')},windowsHide:true,stdio:['ignore','pipe','pipe']});
+ let logs='';server.stderr.on('data',b=>logs+=b);
+ await new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(Error('Test server startup timed out: '+logs)),15000);server.stdout.on('data',b=>{if(String(b).includes('Question paper app:')){clearTimeout(timer);resolve();}});server.once('exit',code=>{clearTimeout(timer);reject(Error('Test server exited: '+code+' '+logs));});});
+}
 (async()=>{
  try{
   const db=new sqlite.Database(sourceFile);
@@ -23,13 +29,12 @@ async function upload(cookie,department,set,buffer,archive=false,name='fixture.d
   for(const row of [[1,'Ramapuram'],[2,'Trichy']])await run(db,'INSERT INTO campuses VALUES (?,?)',row);
   for(const row of [[1,'Faculty of Engineering and Technology',1],[2,'College of Engineering and Technology',2],[3,'Faculty of Science and Humanities',1],[4,'College of Science and Humanities',2],[5,'College of Allied Health Sciences',2],[6,'College of Occupational Therapy',2],[7,'College of Management',2]])await run(db,'INSERT INTO institutions VALUES (?,?,?)',row);
   for(const row of [[1,'Mechanical Engineering',1],[30,'Mechanical Engineering',2],[13,'Mathematics',3],[38,'Commerce',4],[44,'Medical Imaging Technology',5],[43,'Occupational Therapy',6],[102,'Management Studies',7]])await run(db,'INSERT INTO departments VALUES (?,?,?)',row);
-  for(const u of [[1,'admin','admin',1,null],[5,'vani','coordinator',1,null],[8,'infant','coordinator',2,null],[10,'rmp-hod','hod',1,1],[11,'try-hod','hod',2,30],[12,'math-hod','hod',1,13],[13,'commerce-hod','hod',2,38],[14,'health-hod','hod',2,44],[15,'ot-hod','hod',2,43],[16,'management-hod','hod',2,102]])await run(db,'INSERT INTO users VALUES (?,?,?,?,?,?,?)',[u[0],u[1],'fixture-password',u[1],...u.slice(2)]);
+  for(const u of [[1,'admin','admin',1,null],[2,'suresh','admin',1,null],[3,'ruby','admin',2,null],[5,'vani','coordinator',1,null],[8,'infant','coordinator',2,null],[10,'rmp-hod','hod',1,1],[11,'try-hod','hod',2,30],[12,'math-hod','hod',1,13],[13,'commerce-hod','hod',2,38],[14,'health-hod','hod',2,44],[15,'ot-hod','hod',2,43],[16,'management-hod','hod',2,102]])await run(db,'INSERT INTO users VALUES (?,?,?,?,?,?,?)',[u[0],u[1],'fixture-password',u[1],...u.slice(2)]);
   await close(db);
+  const accountSnapshot=fs.readFileSync(sourceFile);
   // Pick an available local test port, leaving the real application untouched.
   const net=require('net'),probe=net.createServer();await new Promise(resolve=>probe.listen(0,'127.0.0.1',resolve));const port=probe.address().port;await new Promise(resolve=>probe.close(resolve));base='http://127.0.0.1:'+port;
-  server=spawn(process.execPath,['server.js'],{cwd:__dirname,env:{...process.env,PORT:String(port),HOST:'127.0.0.1',ADMISSIONS_DB:sourceFile,QUESTION_PAPER_DATA_DIR:path.join(dir,'app')},windowsHide:true,stdio:['ignore','pipe','pipe']});
-  let logs='';server.stderr.on('data',b=>logs+=b);
-  await new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(Error('Test server startup timed out: '+logs)),15000);server.stdout.on('data',b=>{if(String(b).includes('Question paper app:')){clearTimeout(timer);resolve();}});server.once('exit',code=>{clearTimeout(timer);reject(Error('Test server exited: '+code+' '+logs));});});
+  await startServer(port);
   const health=await fetch(base+'/health');assert.equal(health.status,200);assert.deepEqual(await health.json(),{ok:true});
   const ac=await login('admin'),hc=await login('rmp-hod'),tc=await login('try-hod'),vc=await login('vani'),ic=await login('infant'),mc=await login('math-hod');
   assert.equal((await request('','/state')).status,401);assert.equal((await request(hc,'/inventory')).status,403);
@@ -118,7 +123,28 @@ async function upload(cookie,department,set,buffer,archive=false,name='fixture.d
    const download=await request(ac,`/generations/${result.data.id}/download`);assert.equal(download.status,200);assert.equal(inspect(download.data).questions.length,50);
    assert.equal((await request(hc,`/generations/${result.data.id}/download`)).status,403);
   }
-  console.log('Integration passed: both-campus screening, Trichy FET/FSH/FMHS/Management and Common RM, exact/rephrased repeats, count-error match reports, subject-only uploads, 10/11 threshold, role isolation, coordinator dependencies, equal-campus generation, both distinct final sets and Word downloads. Real app data was not changed.');
+  // Named administrators can add departments, archive their papers and assign existing HoDs.
+  const sc=await login('suresh'),rc=await login('ruby');
+  for(const cookie of [sc,rc]){const options=(await request(cookie,'/state')).data;assert.equal(options.can_manage_departments,true);assert.equal(options.institutions.length,7);assert.ok(options.hod_accounts.every(u=>!('password' in u)));}
+  for(const cookie of [ac,hc,ic]){assert.equal((await request(cookie,'/departments',{name:'Unauthorized',institution_id:1})).status,403);assert.deepEqual((await request(cookie,'/state')).data.hod_accounts,[]);}
+  const newRmp=await request(sc,'/departments',{name:' Civil   Engineering ',campus_id:1,institution_id:1,hod_user_id:10});assert.equal(newRmp.status,201,JSON.stringify(newRmp.data));assert.equal(newRmp.data.department.name,'Civil Engineering');assert.equal(newRmp.data.department.common_rm_id,201);
+  const newTry=await request(rc,'/departments',{name:'Civil Engineering',campus_id:2,institution_id:2,hod_user_id:11,common_rm_id:201});assert.equal(newTry.status,201);assert.equal(newTry.data.department.common_rm_id,202,'Coordinator cannot be overridden across campuses');
+  assert.equal((await request(rc,'/departments',{name:'civil engineering',institution_id:1})).status,409);
+  for(const body of [{name:' ',institution_id:1},{name:'A'.repeat(121),institution_id:1},{name:'Unknown faculty',institution_id:999},{name:'Wrong campus',campus_id:1,institution_id:2},{name:'Wrong HoD',institution_id:2,hod_user_id:10},{name:'Admin as HoD',institution_id:1,hod_user_id:2},{name:'Common Research Methodology',institution_id:1}])assert.equal((await request(sc,'/departments',body)).status,400);
+  const unassigned=await request(rc,'/departments',{name:'Biostatistics',institution_id:4});assert.equal(unassigned.status,201);assert.equal(unassigned.data.department.common_rm_id,-203);
+  assert.equal((await upload(rc,unassigned.data.department.id,'A',fixture(101),true)).status,200);assert.equal((await upload(tc,unassigned.data.department.id,'A',fixture(70000))).status,400);
+  const rmpId=newRmp.data.department.id,tryId=newTry.data.department.id;
+  assert.ok((await request(hc,'/state')).data.departments.some(d=>d.id===rmpId));assert.ok(!(await request(tc,'/state')).data.departments.some(d=>d.id===rmpId));
+  for(const [d,adminCookie,hodCookie,prefix] of [[rmpId,rc,hc,50000],[tryId,sc,tc,60000]]){
+   const past=await upload(adminCookie,d,'A',fixture(101),true);assert.equal(past.status,200);assert.equal((await request(d===rmpId?tc:hc,`/papers/${past.data.id}/download`)).status,404);
+   const repeated=await upload(hodCookie,d,'A',fixture(prefix,{repeat:11}));assert.equal(repeated.status,422);assert.equal(repeated.data.screening.matched_count,11);
+   for(const [index,set] of ['A','B'].entries()){const fresh=await upload(hodCookie,d,set,fixture(prefix+index));assert.equal(fresh.status,200);assert.equal((await request(sc,`/papers/${fresh.data.id}/review`,{})).status,200);}
+  }
+  const newFinal=await request(rc,'/generate',{department_id:rmpId,set_name:'A'});assert.equal(newFinal.status,200,JSON.stringify(newFinal.data));assert.deepEqual(newFinal.data.distribution,{Ramapuram:25,Trichy:25});
+  // A restart must retain new department assignments and uploaded archive metadata.
+  await new Promise(resolve=>{server.once('exit',resolve);server.kill();});await startServer(port);
+  const restarted=(await request(await login('ruby'),'/state')).data;assert.equal(restarted.departments.filter(d=>d.is_custom).length,3);assert.ok(restarted.papers.some(p=>p.department_id===rmpId&&p.kind==='archive'));assert.ok((await request(await login('rmp-hod'),'/state')).data.departments.some(d=>d.id===rmpId));assert.deepEqual(fs.readFileSync(sourceFile),accountSnapshot,'Admissions accounts must remain unchanged');
+  console.log('Integration passed: both-campus screening, all Trichy faculties and Common RM, match reports, role isolation, Suresh/Ruby department creation, archive upload, HoD assignment, duplicate/input protection, restart persistence and equal-campus generation. Real app data was not changed.');
   if(process.argv.includes('--ui')){console.log('UI fixture available: '+base+' (use rmp-hod / fixture-password). Send a newline to end.');await new Promise(resolve=>process.stdin.once('data',resolve));}
  }finally{
   if(server&&server.exitCode===null)await new Promise(resolve=>{server.once('exit',resolve);server.kill();});

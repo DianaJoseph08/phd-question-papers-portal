@@ -20,6 +20,7 @@ async function schema(db){
  await run(db,'CREATE TABLE IF NOT EXISTS templates(set_name TEXT PRIMARY KEY,path TEXT)');
  await run(db,'CREATE TABLE IF NOT EXISTS generations(id TEXT PRIMARY KEY,path TEXT)');
  await run(db,'CREATE TABLE IF NOT EXISTS screenings(paper_id TEXT PRIMARY KEY,report TEXT)');
+ await run(db,'CREATE TABLE IF NOT EXISTS custom_departments(id INTEGER PRIMARY KEY,name TEXT,institution_id INTEGER,hod_user_id INTEGER,created_by INTEGER,created_at TEXT)');
 }
 async function setup(t){
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'qp-storage-test-')),seed=path.join(dir,'seed');
@@ -37,8 +38,9 @@ test('Windows document paths are portable on the Linux host',()=>{
 test('first startup persists seed files and rows; a fresh container restores them',async t=>{
  const {cloud,instance}=await setup(t);const a=await instance('first');await a.recoverSeed();
  assert.ok(cloud.objects.has('files/past.docx'));assert.ok(cloud.objects.has(key));
- await a.use(async()=>{await run(a.db,'INSERT INTO papers VALUES (?,?,?)',['new','new.docx','uploaded']);await a.commit();});
+ await a.use(async()=>{await run(a.db,'INSERT INTO papers VALUES (?,?,?)',['new','new.docx','uploaded']);await run(a.db,'INSERT INTO custom_departments (id,name,institution_id,hod_user_id,created_by) VALUES (?,?,?,?,?)',[1000,'New Department',1,10,2]);await a.commit();});
  const b=await instance('restart');assert.equal((await all(b.db,'SELECT * FROM papers')).length,2);
+ assert.deepEqual((await all(b.db,'SELECT id,name,hod_user_id FROM custom_departments'))[0],{id:1000,name:'New Department',hod_user_id:10});
 });
 test('an empty remote database recovers the archive and keeps a backup',async t=>{
  const {cloud,instance}=await setup(t);const a=await instance('first');
