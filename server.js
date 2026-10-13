@@ -188,6 +188,7 @@ get('/api/inventory',requireAdmin,(req,res)=>res.json(inventory.map(({path:ignor
 post('/api/import',requireAdmin,async(req,res)=>{const f=inventory.find(f=>f.id===Number(req.body.inventory_id));if(!f)throw Error('Select a local archive document.');req.body.kind='archive';res.json(await store(req,fs.readFileSync(f.path),f.name));});
 post('/api/generate',requireAdmin,async(req,res)=>{
  const department=departments.find(d=>d.id===Number(req.body.department_id));if(!department)throw Error('Select a department.');const set=req.body.set_name;if(!['A','B'].includes(set))throw Error('Select a set.');
+ const template=(await all(persistence.db,'SELECT * FROM templates WHERE set_name=?',[set]))[0];if(!template)throw Error('Upload the administrator Set '+set+' Word template before generation.');const templateBuffer=fs.readFileSync(await ensureFileLocal(template.path));require('./template-paper').templateParts(templateBuffer);
  const matches=departments.filter(d=>departmentKey(d)===departmentKey(department));
  const campusCount=new Set(matches.map(d=>d.campus_id)).size;
  const papers=await all(persistence.db,"SELECT * FROM papers WHERE kind='submission' AND session='January 2027' ORDER BY created_at DESC,rowid DESC");
@@ -227,14 +228,14 @@ post('/api/generate',requireAdmin,async(req,res)=>{
  const excluded=new Set(opposite.flatMap(g=>JSON.parse(g.manifest).map(q=>q.hash)));
  pools.forEach(p=>p.questions=p.questions.filter(q=>!excluded.has(q.hash)));
  const chosen=choose(pools,campusCount<2,set,department.is_common);const id=crypto.randomUUID(),file=path.join(data,'files',id+'.docx');
- const buffer=generate(chosen,department.name,set);fs.writeFileSync(file,buffer);
+ const buffer=generate(chosen,department.name,set,templateBuffer,{facultyName:department.institution});fs.writeFileSync(file,buffer);
  await cloudStorage.putDocument(file,'files/'+id+'.docx');
  const distribution=JSON.stringify({Ramapuram:chosen.filter(q=>q.source.campus===1).length,Trichy:chosen.filter(q=>q.source.campus===2).length});
  const manifest=JSON.stringify(chosen.map((q,i)=>({number:i+1,section:q.section,campus:q.source.campus,paper_id:q.source.id,department_id:q.source.department_id,source_set:q.source.set_name,source_question_number:q.source_number||q.number||q.answer_key_number,answer:q.answer,answer_source:q.answer_source,contributing_department_id:q.contributing_department_id||q.source.department_id,hash:q.hash,text:q.text})));
  await run('INSERT INTO generations (id,department_key,department_name,set_name,path,distribution,manifest) VALUES (?,?,?,?,?,?,?)',[id,departmentKey(department),department.name,set,file,distribution,manifest]);
- await audit.log(req.user,'paper.generated','generation',id,{department:department.name,set,distribution:JSON.parse(distribution)});
+ await audit.log(req.user,'paper.generated','generation',id,{department:department.name,set,distribution:JSON.parse(distribution),template:template.original_name});
  await persistence.commit();
- res.json({id,distribution:JSON.parse(distribution),question_count:chosen.length,common_rm:matches.filter(d=>d.common_rm_id).map(d=>{const c=departments.find(c=>c.id===d.common_rm_id);return {campus:d.campus,category:c.name,coordinator:c.coordinator_name};})});
+ res.json({id,template_name:template.original_name,distribution:JSON.parse(distribution),question_count:chosen.length,common_rm:matches.filter(d=>d.common_rm_id).map(d=>{const c=departments.find(c=>c.id===d.common_rm_id);return {campus:d.campus,category:c.name,coordinator:c.coordinator_name};})});
 });
 get('/api/generations/:id/:action',requireAdmin,async(req,res)=>{const g=(await all(persistence.db,'SELECT * FROM generations WHERE id=?',[req.params.id]))[0];if(!g)return res.status(404).end();if(req.params.action==='manifest')return res.json({distribution:JSON.parse(g.distribution),questions:JSON.parse(g.manifest)});if(req.params.action!=='download')return res.status(404).end();const localPath=await ensureFileLocal(g.path);res.download(localPath,`January-2027-${g.department_name.replace(/[^a-z0-9]/gi,'-')}-Set-${g.set_name}.docx`);});
 app.use(express.static(path.join(root,'public')));

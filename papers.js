@@ -1,8 +1,7 @@
 const Zip = require('pizzip');
 const {DOMParser, XMLSerializer} = require('@xmldom/xmldom');
-const fs = require('fs');
 const crypto = require('crypto');
-const {attachAnswers,markedQuestion}=require('./answers');
+const {attachAnswers}=require('./answers');
 const ns = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
 const esc = s => String(s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&apos;'}[c]));
 const parse = x => new DOMParser().parseFromString(x,'application/xml');
@@ -136,43 +135,5 @@ function choose(pools, single=false, finalSet='A',common=false) {
  }
  return selected;
 }
-function paragraph(s,bold=false,keepNext=false) {return `<w:p>${keepNext?'<w:pPr><w:keepNext/></w:pPr>':''}<w:r><w:rPr>${bold?'<w:b/>':''}<w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/><w:sz w:val="24"/></w:rPr><w:t xml:space="preserve">${esc(s)}</w:t></w:r></w:p>`;}
-function generate(selected,title,set) {
- const issues=selected.filter(q=>!q.answer||q.answer_error);if(issues.length)throw Error('Generation needs an unambiguous correct answer for every selected source question.');
- const out=new Zip(); let body=paragraph('SRMIST • PhD Entrance Examination',true)+paragraph(`${title} • January 2027 • Set ${set}`,true)+paragraph('Name: ____________________   Application No.: ____________________')+paragraph(`Duration: 2 hours | ${selected.length} questions × 1 mark | No negative marking`)+paragraph('Choose one correct option per question. Mark answers on the OMR sheet. Calculators and reference materials are prohibited.');
- const rels=[]; let counter=0,lastSection=''; const namespaceAttrs=new Map();
- selected.forEach((q,index)=>{
-  if(q.section!==lastSection){body+=paragraph(q.section==='research'?'Research Methodology (25 marks)':'Subject-Specific Questions (25 marks)',true,true);lastSection=q.section;}
-  const source=new Zip(fs.readFileSync(q.source.path));
-  const sourceDoc=parse(source.file('word/document.xml').asText());
-  for(const a of Array.from(sourceDoc.documentElement.attributes)) if(a.name.startsWith('xmlns:')) namespaceAttrs.set(a.name,a.value);
-  let xml=markedQuestion(q.xml,q.answer,q.number).replace(/<w:numPr[\s\S]*?<\/w:numPr>/g,'').replace(/<w:pStyle[^>]*\/>/g,'').replace(/<w:rStyle[^>]*\/>/g,'').replace(/(<wp:docPr\b[^>]*\bid=")[^"]+("[^>]*>)/g,(_,a,b)=>a+(++counter)+b);
-  const sourceRels=source.file('word/_rels/document.xml.rels');
-  const docRels=sourceRels?Array.from(parse(sourceRels.asText()).getElementsByTagName('Relationship')):[];
-  xml=xml.replace(/\b(r:embed|r:id|r:link)="([^"]+)"/g,(match,attr,id)=>{
-   const rel=docRels.find(r=>r.getAttribute('Id')===id);if(!rel)throw Error('A document relationship is missing.');
-   if(rel.getAttribute('TargetMode')==='External')throw Error('Linked external content must be embedded before generation.');
-   const target=rel.getAttribute('Target');if(!target.startsWith('media/'))throw Error('Unsupported embedded content; use inline images and Word equations.');
-   const entry=source.file('word/'+target);if(!entry)throw Error('Embedded image is missing.');
-   const newId='rId'+(++counter), dest='media/'+counter+'-'+target.split('/').pop();out.file('word/'+dest,entry.asUint8Array());
-   rels.push(`<Relationship Id="${newId}" Type="${esc(rel.getAttribute('Type'))}" Target="${esc(dest)}"/>`);return `${attr}="${newId}"`;
-  });
-  body+=paragraph(`Question ${index+1}.`,true,true)+xml;
- });
- const cell=(s,header=false)=>`<w:tc><w:tcPr><w:tcW w:w="2400" w:type="dxa"/>${header?'<w:shd w:fill="E7E6E6"/>':''}</w:tcPr>${paragraph(s,header)}</w:tc>`;
- const row=(values,header=false)=>'<w:tr>'+ (header?'<w:trPr><w:tblHeader/></w:trPr>':'<w:trPr><w:cantSplit/></w:trPr>')+values.map(s=>cell(s,header)).join('')+'</w:tr>';
- const half=Math.ceil(selected.length/2);
- body+='<w:p><w:r><w:br w:type="page"/></w:r></w:p>'+paragraph('Answer Key - Set '+set,true);
- body+='<w:tbl><w:tblPr><w:tblW w:w="9600" w:type="dxa"/><w:tblBorders>'+['top','left','bottom','right','insideH','insideV'].map(n=>`<w:${n} w:val="single" w:sz="4" w:color="BFBFBF"/>`).join('')+'</w:tblBorders></w:tblPr><w:tblGrid>'+Array(4).fill('<w:gridCol w:w="2400"/>').join('')+'</w:tblGrid>'+row(['Question No.','Correct Option','Question No.','Correct Option'],true);
- for(let i=0;i<half;i++)body+=row([i+1,selected[i].answer,i+half<selected.length?i+half+1:'',selected[i+half]?.answer||'']);
- body+='</w:tbl>';
- body+='<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1000" w:right="1000" w:bottom="1000" w:left="1000"/></w:sectPr>';
- namespaceAttrs.set('xmlns:w',ns);namespaceAttrs.set('xmlns:r','http://schemas.openxmlformats.org/officeDocument/2006/relationships');
- out.file('word/document.xml',`<?xml version="1.0" encoding="UTF-8"?><w:document ${Array.from(namespaceAttrs).map(([k,v])=>`${k}="${esc(v)}"`).join(' ')}><w:body>${body}</w:body></w:document>`);
- out.file('word/_rels/document.xml.rels',`<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${rels.join('')}</Relationships>`);
- out.file('_rels/.rels','<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>');
- const types={png:'image/png',jpg:'image/jpeg',jpeg:'image/jpeg',gif:'image/gif',emf:'image/x-emf',wmf:'image/x-wmf',svg:'image/svg+xml',tif:'image/tiff',tiff:'image/tiff',bmp:'image/bmp'};
- out.file('[Content_Types].xml',`<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/>${Object.entries(types).map(([ext,type])=>`<Default Extension="${ext}" ContentType="${type}"/>`).join('')}<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>`);
- return out.generate({type:'nodebuffer'});
-}
+function generate(selected,title,set,templateBuffer,context={}) {return require('./template-paper').generateFromTemplate(selected,title,set,templateBuffer,context);}
 module.exports={inspect,choose,generate,text,isAnswerKeyHeading};

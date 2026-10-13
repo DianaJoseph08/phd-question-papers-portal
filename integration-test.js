@@ -37,6 +37,7 @@ async function startServer(port){
   await startServer(port);
   const health=await fetch(base+'/health');assert.equal(health.status,200);assert.deepEqual(await health.json(),{ok:true});
   const ac=await login('admin'),hc=await login('rmp-hod'),tc=await login('try-hod'),vc=await login('vani'),ic=await login('infant'),mc=await login('math-hod');
+  for(const set of ['A','B']){const form=new FormData();form.set('file',new Blob([require('./test-template').templateFixture(set)]),'Admin-Template-'+set+'.docx');assert.equal((await request(ac,'/templates/'+set,form)).status,200);}
   assert.equal((await request('','/state')).status,401);assert.equal((await request(hc,'/inventory')).status,403);
   const state=(await request(hc,'/state')).data;assert.deepEqual(state.departments.map(d=>d.id),[1]);assert.equal(state.departments[0].common_rm_id,201);
   assert.deepEqual((await request(ic,'/state')).data.departments.map(d=>d.id).sort((a,b)=>a-b),[-204,-203,202]);
@@ -115,7 +116,7 @@ async function startServer(port){
   assert.equal((await request(ac,'/storage-status')).data.mode,'local');
   const allHashes=new Set();
   for(const set_name of ['A','B']){
-   const result=await request(ac,'/generate',{department_id:1,set_name});assert.equal(result.status,200,JSON.stringify(result.data));assert.deepEqual(result.data.distribution,{Ramapuram:25,Trichy:25});assert.equal(result.data.question_count,50);assert.equal(result.data.common_rm.length,2);
+   const result=await request(ac,'/generate',{department_id:1,set_name});assert.equal(result.status,200,JSON.stringify(result.data));assert.deepEqual(result.data.distribution,{Ramapuram:25,Trichy:25});assert.equal(result.data.template_name,'Admin-Template-'+set_name+'.docx');assert.equal(result.data.question_count,50);assert.equal(result.data.common_rm.length,2);
    const manifest=(await request(ac,`/generations/${result.data.id}/manifest`)).data;
    assert.equal(manifest.questions.length,50);assert.equal(manifest.questions.filter(q=>q.section==='research').length,25);
    for(const q of manifest.questions){assert.ok(!allHashes.has(q.hash));allHashes.add(q.hash);assert.ok((q.section==='research'?[201,202]:[1,30]).includes(q.department_id));}
