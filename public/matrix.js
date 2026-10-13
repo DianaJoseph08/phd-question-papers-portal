@@ -28,6 +28,28 @@ function bindGeneratedPapers(){
  if(!$('#generatedDepartment'))return;
  $('#generatedDepartment').oninput=()=>{generatedDepartmentKey=$('#generatedDepartment').value;$('#generationRows').innerHTML=generatedFinalRows(state.generations,generatedDepartmentKey);};
 }
+function showGenerationProgress(set){
+ const panel=$('#generationStatus');if(!panel)return;
+ panel.hidden=false;panel.setAttribute('role','status');panel.innerHTML=`<h2>Generating final Set ${escape(set)}</h2><p>Checking approved source papers and preparing the Word document. Please wait for the result.</p>`;panel.scrollIntoView({block:'start'});
+}
+function showGenerationFeedback(){
+ const panel=$('#generationStatus');if(!panel)return;
+ panel.hidden=false;panel.setAttribute('role','alert');panel.innerHTML=$('#previewContent').innerHTML;panel.scrollIntoView({block:'start'});
+}
+function bindGenerationButtons(){
+ document.querySelectorAll('[data-generate]').forEach(button=>button.onclick=async()=>{
+  const label=button.textContent;button.disabled=true;button.textContent='Generating final Set '+button.dataset.set+'…';showGenerationProgress(button.dataset.set);
+  try{
+   const result=await post('/generate',{department_id:Number(button.dataset.generate),set_name:button.dataset.set});generatedDepartmentKey=result.department_key||groupKey(dep(Number(button.dataset.generate)));page='generated';render();message('Paper generated successfully.');showGeneratedPaper(result);
+  }catch(e){
+   if(e.details?.generation_issues)showGenerationIssues(e.details.generation_issues,button.dataset.set);
+   else if(e.details?.screening)showScreening(e.details.screening,true,'generate');
+   else if(e.details?.template)showTemplateErrors(e.details.template);
+   else showGenerationFailure(button.dataset.set,e.message);
+   showGenerationFeedback();
+  }finally{button.disabled=false;button.textContent=label;}
+ });
+}
 let generatedLoadVersion=0;
 async function loadGeneratedPapers(){
  const version=++generatedLoadVersion;
@@ -71,6 +93,6 @@ function showScreening(report,blocked,action='upload'){
  if(!$('#preview').open)$('#preview').showModal();
 }
 function showTemplateErrors(report){$('#previewContent').innerHTML=`<h2>Question count or sections need correction</h2><p>Your file has not been saved.</p>${structureSummary(report)}`;if(!$('#preview').open)$('#preview').showModal();}
-function showGenerationIssues(issues){$('#previewContent').innerHTML=`<h2>Final paper could not be generated</h2><p>Your submissions remain saved and approved. The table identifies the source papers that need correction before a complete paper and matching answer key can be produced.</p><div class="table-wrap"><table><thead><tr><th>Source paper</th><th>Question</th><th>What needs correction</th></tr></thead><tbody>${issues.map(i=>`<tr><td>${escape(i.filename)}<br>${escape(i.campus)} · ${escape(i.department)} · Set ${escape(i.set)}</td><td>${sectionLabel(i.section)} ${i.section?'Question ':''}${escape(i.question)}${questionExcerpt(i)}</td><td>${escape(i.remark)}${answerEvidence(i)}</td></tr>`).join('')}</tbody></table></div>`;if(!$('#preview').open)$('#preview').showModal();}
+function showGenerationIssues(issues,set=''){$('#previewContent').innerHTML=`<h2>${set?'Final Set '+escape(set):'Final paper'} could not be generated</h2><p>Your submissions remain saved and approved. The table identifies the source papers that need correction before a complete paper and matching answer key can be produced.</p><div class="table-wrap"><table><thead><tr><th>Source paper</th><th>Question</th><th>What needs correction</th></tr></thead><tbody>${issues.map(i=>`<tr><td>${escape(i.filename)}<br>${escape(i.campus)} · ${escape(i.department)} · Set ${escape(i.set)}</td><td>${sectionLabel(i.section)} ${i.section?'Question ':''}${escape(i.question)}${questionExcerpt(i)}</td><td>${escape(i.remark)}${answerEvidence(i)}</td></tr>`).join('')}</tbody></table></div>`;if(!$('#preview').open)$('#preview').showModal();}
 function showGenerationFailure(set,reason){$('#previewContent').innerHTML=`<h2>Final Set ${escape(set)} was not generated</h2><p>${escape(reason)}</p><p>Previously saved final papers are available in Generated papers.</p><button data-nav="generated">Open generated papers</button>`;if(!$('#preview').open)$('#preview').showModal();}
 function showGeneratedPaper(result){$('#previewContent').innerHTML=`<h2>Question paper generated</h2>${result.template_name?`<p>Admin template: <strong>${escape(result.template_name)}</strong></p>`:''}<p>${escape(result.question_count)} questions with bold correct options and a matching answer-key table.</p>${result.section_distribution?sectionDistributionTable(result.section_distribution):''}${result.common_rm?.length?`<p>Common Research Methodology included automatically:</p><ul>${result.common_rm.map(c=>`<li>${escape(c.campus)} · ${escape(c.category)} · ${escape(c.coordinator)}</li>`).join('')}</ul>`:''}<p><a class="button" href="/api/generations/${result.id}/download">Download generated Word paper</a> <button data-source-record="${escape(result.id)}">View source record</button></p><p>This paper is saved in the Generated papers tab. Open that tab whenever you need it.</p><button data-nav="generated">Open generated papers</button>`;if(!$('#preview').open)$('#preview').showModal();}
