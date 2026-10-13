@@ -2,16 +2,16 @@ const {DOMParser,XMLSerializer}=require('@xmldom/xmldom');
 const ns='http://schemas.openxmlformats.org/wordprocessingml/2006/main';
 const parse=xml=>new DOMParser().parseFromString(xml,'application/xml');
 const serialize=n=>new XMLSerializer().serializeToString(n);
-function content(node){let result='';function visit(n){if(n.nodeName==='w:t')result+=n.textContent;else if(['w:br','w:cr'].includes(n.nodeName))result+='\n';else if(n.nodeName==='w:tab')result+='\t';else for(let c=n.firstChild;c;c=c.nextSibling)visit(c);}visit(node);return result;}
+function content(node){let result='';function visit(n){if(['w:t','m:t'].includes(n.nodeName))result+=n.textContent;else if(['w:br','w:cr'].includes(n.nodeName))result+='\n';else if(n.nodeName==='w:tab')result+='\t';else for(let c=n.firstChild;c;c=c.nextSibling)visit(c);}visit(node);return result;}
 function questionDoc(xml){return parse(`<root xmlns:w="${ns}">${xml}</root>`);}
 function layout(xml){
  const doc=questionDoc(xml),runs=[],parts=[];let position=0;
  for(const p of Array.from(doc.getElementsByTagName('w:p'))){
-  for(const r of Array.from(p.getElementsByTagName('w:r'))){const value=content(r);runs.push({node:r,start:position,end:position+value.length,text:value});parts.push(value);position+=value.length;}
+  function visit(n){if(['w:r','m:r'].includes(n.nodeName)){const value=content(n);runs.push({node:n,start:position,end:position+value.length,text:value});parts.push(value);position+=value.length;}else for(let c=n.firstChild;c;c=c.nextSibling)visit(c);}visit(p);
   parts.push('\n');position++;
  }
- const text=parts.join(''),matches=[...text.matchAll(/(?:^|[\s])\(?([A-Da-d])\s*\)?\s*[.):：\-–—]\s*/g)];
- const options=matches.map((m,i)=>({label:m[1].toUpperCase(),start:m.index+m[0].search(/\S/),body:m.index+m[0].length,end:matches[i+1]?matches[i+1].index:text.length}));
+ const text=parts.join(''),matches=[...text.matchAll(/(?:^|(?<=\s))(?:\(([A-Da-d])\)[.:]?|([A-Da-d])[ \t]*[.):：\-–—])[ \t]*/g)];
+ const options=matches.map((m,i)=>({label:(m[1]||m[2]).toUpperCase(),start:m.index,body:m.index+m[0].length,end:matches[i+1]?matches[i+1].index:text.length}));
  return {doc,text,runs,options};
 }
 function boldValue(r){const b=r.getElementsByTagName('w:rPr')[0]?.getElementsByTagName('w:b')[0];return Boolean(b&&!['0','false','off'].includes(b.getAttribute('w:val')));}
@@ -83,12 +83,20 @@ function markedQuestion(xml,answer,number=null){
    const r=run.node.cloneNode(false),pr=run.node.getElementsByTagName('w:rPr')[0]?.cloneNode(true)||l.doc.createElementNS(ns,'w:rPr');
    for(const tag of ['w:b','w:bCs'])for(const n of Array.from(pr.getElementsByTagName(tag)))n.parentNode.removeChild(n);
    for(const tag of ['w:b','w:bCs']){const b=l.doc.createElementNS(ns,tag);b.setAttribute('w:val',bold?'1':'0');pr.appendChild(b);}
+   if(run.node.nodeName==='m:r'){
+    const mathNs='http://schemas.openxmlformats.org/officeDocument/2006/math',mpr=run.node.getElementsByTagName('m:rPr')[0]?.cloneNode(true)||l.doc.createElementNS(mathNs,'m:rPr');
+    const previousStyle=mpr.getElementsByTagName('m:sty')[0]?.getAttribute('m:val');
+    for(const old of Array.from(mpr.getElementsByTagName('m:sty')))old.parentNode.removeChild(old);
+    const nextStyle=bold?'b':previousStyle==='b'?'p':previousStyle==='bi'?'i':previousStyle;
+    if(nextStyle){const sty=l.doc.createElementNS(mathNs,'m:sty');sty.setAttribute('m:val',nextStyle);mpr.appendChild(sty);}
+    r.appendChild(mpr);
+   }
    r.appendChild(pr);r.appendChild(child);replacement.push(r);
   }
   for(const child of Array.from(run.node.childNodes)){
-   if(child.nodeName==='w:rPr')continue;
+   if(['w:rPr','m:rPr'].includes(child.nodeName))continue;
    const value=content(child),end=cursor+value.length;
-   if(child.nodeName==='w:t'){
+   if(['w:t','m:t'].includes(child.nodeName)){
     const cuts=[cursor,end,...[target.start,target.end].filter(n=>n>cursor&&n<end)].sort((a,b)=>a-b);
     for(let i=0;i<cuts.length-1;i++){
      const t=child.cloneNode(false);t.setAttribute('xml:space','preserve');t.appendChild(l.doc.createTextNode(value.slice(cuts[i]-cursor,cuts[i+1]-cursor)));piece(t,cuts[i]>=target.start&&cuts[i]<target.end);
@@ -103,6 +111,13 @@ function markedQuestion(xml,answer,number=null){
   let remaining=prefix[0].length;
   for(const t of Array.from(l.doc.getElementsByTagName('w:t'))){if(!remaining)break;const amount=Math.min(t.textContent.length,remaining);t.textContent=t.textContent.slice(amount);remaining-=amount;}
  }
+ const paragraphs=Array.from(l.doc.getElementsByTagName('w:p')).filter(p=>!p.getElementsByTagName('w:p').length);
+ paragraphs.forEach((p,index)=>{
+  let pr=Array.from(p.childNodes).find(n=>n.nodeName==='w:pPr');if(!pr){pr=l.doc.createElementNS(ns,'w:pPr');p.insertBefore(pr,p.firstChild);}
+  for(const tag of ['w:keepNext','w:keepLines'])for(const old of Array.from(pr.getElementsByTagName(tag)))old.parentNode.removeChild(old);
+  pr.appendChild(l.doc.createElementNS(ns,'w:keepLines'));
+  if(index<paragraphs.length-1)pr.appendChild(l.doc.createElementNS(ns,'w:keepNext'));
+ });
  return Array.from(l.doc.documentElement.childNodes).map(serialize).join('');
 }
 module.exports={attachAnswers,markedQuestion,layout};

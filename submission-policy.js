@@ -35,7 +35,7 @@ function validateTemplate(buffer,d,info){
  function optionLabels(question){
   const value=String(question.text||'').replace(/\u00a0/g,' '),labels=new Set();
   // Accept A), A., (A), A:, A- and labels separated from their option by a tab/line break.
-  for(const match of value.matchAll(/(?:^|[\r\n\t ]+)\(?([A-Da-d])\s*\)?\s*[.\):：\-–—]\s*/g))labels.add(match[1].toUpperCase());
+  for(const match of value.matchAll(/(?:^|(?<=\s))(?:\(([A-Da-d])\)[.:]?|([A-Da-d])[ \t]*[.):：\-–—])[ \t]*/g))labels.add((match[1]||match[2]).toUpperCase());
   for(const match of value.matchAll(/(?:^|[\r\n])\s*\(([A-Da-d])\)\s+/g))labels.add(match[1].toUpperCase());
   return labels;
  }

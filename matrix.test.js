@@ -22,3 +22,9 @@ test('structural corrections retain matches and display formatting remarks as ad
  vm.runInContext('showScreening(report,true)',context);assert.ok(dialog.open);assert.ok(content.innerHTML.includes('Question 8')&&content.innerHTML.includes('Question 17')&&content.innerHTML.includes('24 subject'));assert.ok(!content.innerHTML.includes('revise matched'));assert.ok(content.innerHTML.includes('Formatting remarks · advisory')&&content.innerHTML.includes('do not block')&&content.innerHTML.includes('missing B'));assert.ok(content.innerHTML.indexOf('Past question')<content.innerHTML.indexOf('Formatting remarks'));
  context.report.rejected=true;vm.runInContext('showScreening(report,true)',context);assert.ok(content.innerHTML.includes('Too many repeated questions'));assert.ok(content.innerHTML.includes('Template remarks'));
 });
+test('generation success provides a direct download and identifies automatic Common RM',()=>{
+ const content={innerHTML:''},dialog={open:false,showModal(){this.open=true;}},context=vm.createContext({escape:s=>String(s??'').replaceAll('<','&lt;'),$:s=>s==='#previewContent'?content:dialog});
+ vm.runInContext(fs.readFileSync(require.resolve('./public/matrix.js'),'utf8'),context);
+ context.result={id:'fixture-id',question_count:50,common_rm:[{campus:'Ramapuram',category:'Common RM',coordinator:'Vani <name>'}]};
+ vm.runInContext('showGeneratedPaper(result)',context);assert.ok(dialog.open);assert.ok(content.innerHTML.includes('/api/generations/fixture-id/download'));assert.ok(content.innerHTML.includes('Download generated Word paper'));assert.ok(content.innerHTML.includes('included automatically'));assert.ok(content.innerHTML.includes('Vani &lt;name>'));
+});

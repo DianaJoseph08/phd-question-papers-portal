@@ -115,7 +115,7 @@ async function startServer(port){
   assert.equal((await request(ac,'/storage-status')).data.mode,'local');
   const allHashes=new Set();
   for(const set_name of ['A','B']){
-   const result=await request(ac,'/generate',{department_id:1,set_name});assert.equal(result.status,200,JSON.stringify(result.data));assert.deepEqual(result.data.distribution,{Ramapuram:25,Trichy:25});
+   const result=await request(ac,'/generate',{department_id:1,set_name});assert.equal(result.status,200,JSON.stringify(result.data));assert.deepEqual(result.data.distribution,{Ramapuram:25,Trichy:25});assert.equal(result.data.question_count,50);assert.equal(result.data.common_rm.length,2);
    const manifest=(await request(ac,`/generations/${result.data.id}/manifest`)).data;
    assert.equal(manifest.questions.length,50);assert.equal(manifest.questions.filter(q=>q.section==='research').length,25);
    for(const q of manifest.questions){assert.ok(!allHashes.has(q.hash));allHashes.add(q.hash);assert.ok((q.section==='research'?[201,202]:[1,30]).includes(q.department_id));}
@@ -137,7 +137,7 @@ async function startServer(port){
    const password='Changed new-HoD password!';assert.equal((await request(temporary,'/password',{current_password:new_hod.new_password,new_password:password,confirm_password:password})).status,200);
    const own=(await request(temporary,'/state')).data;assert.deepEqual(own.departments.map(d=>d.id),[added.data.department.id]);assert.equal(own.departments[0].campus_id,campus);
    const paper=await upload(temporary,added.data.department.id,'A',fixture(92000,{count:24,invalid:true}),false,'fixture.docx','Template mismatch supplied for admin review.');assert.equal(paper.status,200);assert.equal(paper.data.screening.template.passed,false);assert.equal((await request(cookie,`/papers/${paper.data.id}/review`,{})).status,200);
-   const viewed=(await request(cookie,`/papers/${paper.data.id}/preview`)).data;assert.equal(viewed.screening.submission_note,'Template mismatch supplied for admin review.');
+   const viewed=(await request(cookie,`/papers/${paper.data.id}/preview`)).data;assert.equal(viewed.screening.submission_note,'Template mismatch supplied for admin review.');const b=await upload(temporary,added.data.department.id,'B',fixture(93000));assert.equal(b.status,200);assert.equal((await request(cookie,`/papers/${b.data.id}/review`,{})).status,200);const cannotGenerate=await request(cookie,'/generate',{department_id:added.data.department.id,set_name:'A'});assert.equal(cannotGenerate.status,422);assert.ok(cannotGenerate.data.generation_issues.some(i=>/Read 0 RM \/ 24 subject/.test(i.remark)));
   }
   const newRmp=await request(sc,'/departments',{name:' Civil   Engineering ',campus_id:1,institution_id:1,hod_user_id:10});assert.equal(newRmp.status,201,JSON.stringify(newRmp.data));assert.equal(newRmp.data.department.name,'Civil Engineering');assert.equal(newRmp.data.department.common_rm_id,201);
   const newTry=await request(rc,'/departments',{name:'Civil Engineering',campus_id:2,institution_id:2,hod_user_id:11,common_rm_id:201});assert.equal(newTry.status,201);assert.equal(newTry.data.department.common_rm_id,202,'Coordinator cannot be overridden across campuses');
@@ -162,12 +162,12 @@ async function startServer(port){
   // A new department on the other campus must group with the existing admissions department.
   const newCyber=await request(rc,'/departments',{name:'Cybersecurity',institution_id:2,hod_user_id:11});assert.equal(newCyber.status,201);const cyberId=newCyber.data.department.id,cyber=await login('cyber-hod');
   for(const [d,cookie,prefix] of [[14,cyber,70000],[cyberId,tc,80000]])for(const [index,set] of ['A','B'].entries()){
-   const fresh=await upload(cookie,d,set,fixture(prefix+index));assert.equal(fresh.status,200);assert.equal((await request(sc,`/papers/${fresh.data.id}/review`,{})).status,200);
+   let source=fixture(prefix+index,{full:d===14});if(d===14){const zip=new Zip(source);zip.file('word/document.xml',zip.file('word/document.xml').asText().replace(/<w:p><w:r><w:t>(\d+) [ABCD]<\/w:t><\/w:r><\/w:p>/g,(m,n)=>Number(n)<=25?'':m));source=zip.generate({type:'nodebuffer'});}const fresh=await upload(cookie,d,set,source);assert.equal(fresh.status,200);assert.equal((await request(sc,`/papers/${fresh.data.id}/review`,{})).status,200);
   }
   for(const set_name of ['A','B']){
    const final=await request(sc,'/generate',{department_id:14,set_name});assert.equal(final.status,200,JSON.stringify(final.data));assert.deepEqual(final.data.distribution,{Ramapuram:25,Trichy:25});
    const manifest=(await request(sc,`/generations/${final.data.id}/manifest`)).data;
-   for(const d of [14,cyberId,201,202])for(const s of ['A','B'])assert.ok(manifest.questions.some(q=>q.department_id===d&&q.source_set===s));
+   assert.ok(manifest.questions.filter(q=>q.section==='research').every(q=>[201,202].includes(q.department_id)),'Assigned Common RM must replace a full HoD paper’s own RM');for(const d of [14,cyberId,201,202])for(const s of ['A','B'])assert.ok(manifest.questions.some(q=>q.department_id===d&&q.source_set===s));
   }
   // Remove the latest archive without resurrecting the previous version or using it in screening.
   const removed=await upload(rc,unassigned.data.department.id,'A',fixture(202),true,'latest-archive.docx');assert.equal(removed.status,200);

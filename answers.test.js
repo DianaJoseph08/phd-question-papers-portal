@@ -41,3 +41,12 @@ test('common RM keys ignore blank unused subject rows',()=>{
 test('automatic numbering never removes a numerical value from the question stem',()=>{
  const xml=p('25 students were sampled. Which result? A) alpha B) beta C) gamma D) delta');assert.ok(layout(markedQuestion(xml,'A',null)).text.startsWith('25 students'));
 });
+test('adjacent bare option labels with equations retain all four labels and bold the selected formula',()=>{
+ let body=p('Subject-Specific Questions')+p('26. Which expression applies?');
+ for(const label of ['a','b','c','d'])body+=`<w:p><w:r><w:t>(${label}) </w:t></w:r><m:oMath xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math"><m:r><m:t>x${label}=2</m:t></m:r></m:oMath></w:p>`;
+ body+=p('Answer Key')+'<w:tbl>'+row([26,'B'])+'</w:tbl>';
+ const q=inspect(doc(body)).questions[0];assert.equal(q.answer,'B');assert.deepEqual(layout(q.xml).options.map(o=>o.label),['A','B','C','D']);
+ const xml=markedQuestion(q.xml,q.answer,q.number),l=layout(xml);assert.ok(l.text.includes('xb=2'));assert.ok(xml.includes('m:val="b"'));
+ const selected=l.runs.find(r=>r.text==='xb=2');assert.equal(selected.node.getElementsByTagName('w:b')[0].getAttribute('w:val'),'1');
+ assert.equal(l.doc.getElementsByTagName('w:keepNext').length,4);assert.equal(l.doc.getElementsByTagName('w:keepLines').length,5);
+});

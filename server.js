@@ -198,15 +198,24 @@ post('/api/generate',requireAdmin,async(req,res)=>{
   const p=latest.get(key);
   if(!p?.reviewed||p.deleted_at)throw Error('Generation needs approved Set '+sourceSet+' for '+d.campus+' / '+d.institution+' / '+d.name+(d.is_common?' from '+d.coordinator_name:'')+'. Subject submissions can be uploaded while Common RM is pending.');
   const localPath=await ensureFileLocal(p.path),buffer=fs.readFileSync(localPath),info=inspectForDepartment(buffer,d);
-  await assessSubmission(d,buffer,info,sourceSet,{forGeneration:true});
-  const issues=info.questions.filter(q=>q.answer_error||!q.answer).map(q=>({filename:p.original_name,campus:d.campus,department:d.name,set:sourceSet,section:q.section,question:q.number||q.answer_key_number||info.questions.indexOf(q)+1,remark:q.answer_error||'Correct answer missing.'}));
-  if(issues.length){const e=Error('Correct these source answers before generating the final paper.');e.status=422;e.details={generation_issues:issues};throw e;}
-  const pool={...p,path:localPath,campus:p.campus_id,paper_type:info.paper_type,questions:info.questions};checked.set(key,pool);return pool;
+  await assessSubmission(d,buffer,info,sourceSet);
+  // Assigned Common RM is authoritative. The HoD supplies subject questions only,
+  // even if their document also contains a Research Methodology section.
+  const questions=d.is_common?info.questions.filter(q=>q.section==='research'):d.common_rm_id?info.questions.filter(q=>q.section==='subject'):info.questions;
+  const counts={research:questions.filter(q=>q.section==='research').length,subject:questions.filter(q=>q.section==='subject').length};
+  const expected=d.is_common?'25 RM':d.common_rm_id?'25 subject':'25 RM + 25 subject';
+  const usable=d.is_common?counts.research===25:d.common_rm_id?counts.subject===25:info.valid;
+  const issues=[];
+  if(!usable)issues.push({filename:p.original_name,campus:d.campus,department:d.name,set:sourceSet,question:'—',remark:`Need ${expected}. Read ${counts.research} RM / ${counts.subject} subject. Check the source numbering and section headings.`});
+  issues.push(...questions.filter(q=>q.answer_error||!q.answer||placeholder(q)).map(q=>({filename:p.original_name,campus:d.campus,department:d.name,set:sourceSet,section:q.section,question:q.source_number||q.number||q.answer_key_number||questions.indexOf(q)+1,remark:placeholder(q)?'Replace this unused question placeholder.':q.answer_error||'Correct answer missing.'})));
+  if(issues.length){const e=Error('Correct these source questions or answers before generating the final paper.');e.status=422;e.details={generation_issues:issues};throw e;}
+  await run('UPDATE papers SET counts=?,valid=? WHERE id=?',[JSON.stringify(info.counts),info.valid?1:0,p.id]);
+  const pool={...p,path:localPath,campus:p.campus_id,paper_type:d.common_rm_id?'subject_only':info.paper_type,questions};checked.set(key,pool);return pool;
  }
  const pools=[];
  for(const d of matches)for(const sourceSet of ['A','B']){
   const subject=await approvedPool(d,sourceSet);let questions=subject.questions;
-  if(subject.paper_type==='subject_only'){
+  if(d.common_rm_id){
    const coordinator=departments.find(c=>c.id===d.common_rm_id);
    if(!coordinator)throw Error('Common RM assignment is missing for '+d.name+'.');
    const common=await approvedPool(coordinator,sourceSet);
@@ -225,7 +234,7 @@ post('/api/generate',requireAdmin,async(req,res)=>{
  await run('INSERT INTO generations (id,department_key,department_name,set_name,path,distribution,manifest) VALUES (?,?,?,?,?,?,?)',[id,departmentKey(department),department.name,set,file,distribution,manifest]);
  await audit.log(req.user,'paper.generated','generation',id,{department:department.name,set,distribution:JSON.parse(distribution)});
  await persistence.commit();
- res.json({id,distribution:JSON.parse(distribution)});
+ res.json({id,distribution:JSON.parse(distribution),question_count:chosen.length,common_rm:matches.filter(d=>d.common_rm_id).map(d=>{const c=departments.find(c=>c.id===d.common_rm_id);return {campus:d.campus,category:c.name,coordinator:c.coordinator_name};})});
 });
 get('/api/generations/:id/:action',requireAdmin,async(req,res)=>{const g=(await all(persistence.db,'SELECT * FROM generations WHERE id=?',[req.params.id]))[0];if(!g)return res.status(404).end();if(req.params.action==='manifest')return res.json({distribution:JSON.parse(g.distribution),questions:JSON.parse(g.manifest)});if(req.params.action!=='download')return res.status(404).end();const localPath=await ensureFileLocal(g.path);res.download(localPath,`January-2027-${g.department_name.replace(/[^a-z0-9]/gi,'-')}-Set-${g.set_name}.docx`);});
 app.use(express.static(path.join(root,'public')));
