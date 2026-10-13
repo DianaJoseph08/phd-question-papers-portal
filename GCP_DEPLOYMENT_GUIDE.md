@@ -37,6 +37,8 @@ The script prints recent service logs. A successful start includes `[Storage] Re
 
 ## Limits
 
+If a generated set is missing, run `bash diagnose-generated-papers.sh` from an up-to-date checkout in Cloud Shell before attempting another repair. This read-only script reports the active revision and traffic, inspects a temporary copy of the cloud database, lists Civil Engineering's saved generation history and latest A/B records, checks whether their Word files exist, and reads generation request/error logs. It does not change the service, bucket objects or database and does not print question text or account passwords. Paste its terminal output for diagnosis. A generation button click alone does not confirm a saved paper; the success dialog must appear after the cloud commit.
+
 This is a small-portal snapshot design. Each mutation writes a whole SQLite snapshot; use a managed transactional database before increasing scale. Conflicting requests fail for retry, and a network failure after cloud acknowledgement may leave an operation saved even when the client did not receive the response. Check the library before resubmitting after a network error. No software can promise zero data loss under every failure.
 
 `data/papers.db`, `data/phd_admissions.db` and `data/files/` were already included in this repository by the earlier deployment. Keep that repository and its build artifacts private. The repair commits contain code, tests and documentation only; recovery snapshots outside the app folder are not pushed.
