@@ -8,8 +8,8 @@ function commonFor(d){
  return null;
 }
 const placeholder=q=>/\b(?:the\s+)?question\s+starts?\s+here\b/i.test(q.text);
-function inspectForDepartment(buffer,d){
- const info=inspect(buffer,{subjectName:d.is_common?undefined:d.name}),warnings=[];
+function inspectForDepartment(buffer,d,{includeAnswers=true}={}){
+ const info=inspect(buffer,{subjectName:d.is_common?undefined:d.name,includeAnswers:false}),warnings=[];
  // A common-RM department may leave the unused RM template placeholders in place.
  if(d.common_rm_id&&info.questions.filter(q=>q.section==='subject').length===25){
   const unused=info.questions.filter(q=>q.section==='research'&&placeholder(q));
@@ -25,6 +25,7 @@ function inspectForDepartment(buffer,d){
  const subjectOnly=counts.subject===25&&counts.research===0&&!unclassified;
  info.counts=counts;info.valid=(d.is_common?researchOnly:full||Boolean(d.common_rm_id&&subjectOnly))&&!info.questions.some(placeholder);
  info.paper_type=d.is_common?'common_rm':subjectOnly?'subject_only':'full';info.warnings=warnings;
+ if(includeAnswers){const doc=new DOMParser().parseFromString(new Zip(buffer).file('word/document.xml').asText(),'application/xml');require('./answers').attachAnswers(doc,info.questions,isAnswerKeyHeading);}
  return info;
 }
 function validateTemplate(buffer,d,info){
@@ -46,6 +47,7 @@ function validateTemplate(buffer,d,info){
  const doc=new DOMParser().parseFromString(new Zip(buffer).file('word/document.xml').asText(),'application/xml');
  const key=Array.from(doc.getElementsByTagName('w:p')).some(p=>isAnswerKeyHeading(text(p).trim()));
  if(!key)warnings.push('No separate Answer Key heading detected. The administrator must check the supplied answers before approval.');
- return {passed:errors.length===0,paper_type:info.paper_type,counts:info.counts,expected:d.is_common?'25 RM':d.common_rm_id?'25 subject (Common RM supplied separately)':'25 RM + 25 subject',checks:['Word .docx format','Numbered question count and sections','No unfilled question placeholders'],errors,warnings,option_errors};
+ const answer_errors=info.questions.filter(q=>q.answer_error).map(q=>({question:q.number||info.questions.indexOf(q)+1,section:q.section,remark:q.answer_error}));
+ return {advisory:true,passed:errors.length===0,paper_type:info.paper_type,counts:info.counts,expected:d.is_common?'25 RM':d.common_rm_id?'25 subject (Common RM supplied separately)':'25 RM + 25 subject',checks:['Word .docx format','Numbered question count and sections','No unfilled question placeholders'],errors,warnings,option_errors,answer_errors};
 }
 module.exports={commonFor,inspectForDepartment,validateTemplate,placeholder};

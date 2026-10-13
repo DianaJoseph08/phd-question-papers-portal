@@ -2,13 +2,14 @@ const Zip = require('pizzip');
 const {DOMParser, XMLSerializer} = require('@xmldom/xmldom');
 const fs = require('fs');
 const crypto = require('crypto');
+const {attachAnswers,markedQuestion}=require('./answers');
 const ns = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
 const esc = s => String(s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&apos;'}[c]));
 const parse = x => new DOMParser().parseFromString(x,'application/xml');
 const serialize = n => new XMLSerializer().serializeToString(n);
 function text(n) {let result='';function visit(node){if(node.nodeName==='w:t')result+=node.textContent;else if(['w:br','w:cr'].includes(node.nodeName))result+='\n';else if(node.nodeName==='w:tab')result+='\t';else for(let child=node.firstChild;child;child=child.nextSibling)visit(child);}visit(n);return result;}
 const isAnswerKeyHeading=t=>t.length<100&&(/answer\s*key\s*$/i.test(t)||/^answer\s*key\b/i.test(t));
-function inspect(buffer,{subjectName}={}) {
+function inspect(buffer,{subjectName,includeAnswers=true}={}) {
  const zip=new Zip(buffer); const entry=zip.file('word/document.xml');
  if(!entry) throw Error('Upload a valid Word .docx document.');
  if(entry.asText().length>15000000) throw Error('Document is too large to process.');
@@ -82,6 +83,7 @@ function inspect(buffer,{subjectName}={}) {
   pending.push(xml);
  }
  flush();
+ if(includeAnswers)attachAnswers(doc,questions,isAnswerKeyHeading);
  const counts={research:questions.filter(q=>q.section==='research').length,subject:questions.filter(q=>q.section==='subject').length};
  const unclassified=questions.filter(q=>q.section==='unclassified').length;if(unclassified)counts.unclassified=unclassified;
  const placeholders=questions.some(q=>/\b(?:the\s+)?question\s+starts?\s+here\b/i.test(q.text));
@@ -119,16 +121,17 @@ function choose(pools, single=false, finalSet='A',common=false) {
  }
  return selected;
 }
-function paragraph(s,bold=false) {return `<w:p><w:r><w:rPr>${bold?'<w:b/>':''}<w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/><w:sz w:val="24"/></w:rPr><w:t xml:space="preserve">${esc(s)}</w:t></w:r></w:p>`;}
+function paragraph(s,bold=false,keepNext=false) {return `<w:p>${keepNext?'<w:pPr><w:keepNext/></w:pPr>':''}<w:r><w:rPr>${bold?'<w:b/>':''}<w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/><w:sz w:val="24"/></w:rPr><w:t xml:space="preserve">${esc(s)}</w:t></w:r></w:p>`;}
 function generate(selected,title,set) {
+ const issues=selected.filter(q=>!q.answer||q.answer_error);if(issues.length)throw Error('Generation needs an unambiguous correct answer for every selected source question.');
  const out=new Zip(); let body=paragraph('SRMIST • PhD Entrance Examination',true)+paragraph(`${title} • January 2027 • Set ${set}`,true)+paragraph('Name: ____________________   Application No.: ____________________')+paragraph(`Duration: 2 hours | ${selected.length} questions × 1 mark | No negative marking`)+paragraph('Choose one correct option per question. Mark answers on the OMR sheet. Calculators and reference materials are prohibited.');
  const rels=[]; let counter=0,lastSection=''; const namespaceAttrs=new Map();
  selected.forEach((q,index)=>{
-  if(q.section!==lastSection){body+=paragraph(q.section==='research'?'Research Methodology (25 marks)':'Subject-Specific Questions (25 marks)',true);lastSection=q.section;}
+  if(q.section!==lastSection){body+=paragraph(q.section==='research'?'Research Methodology (25 marks)':'Subject-Specific Questions (25 marks)',true,true);lastSection=q.section;}
   const source=new Zip(fs.readFileSync(q.source.path));
   const sourceDoc=parse(source.file('word/document.xml').asText());
   for(const a of Array.from(sourceDoc.documentElement.attributes)) if(a.name.startsWith('xmlns:')) namespaceAttrs.set(a.name,a.value);
-  let xml=q.xml.replace(/<w:numPr[\s\S]*?<\/w:numPr>/g,'').replace(/<w:b(?:\s[^>]*)?\s*\/>/g,'').replace(/<w:bCs(?:\s[^>]*)?\s*\/>/g,'').replace(/<w:b(?:\s[^>]*)?>[\s\S]*?<\/w:b>/g,'').replace(/<w:pStyle[^>]*\/>/g,'').replace(/<w:rStyle[^>]*\/>/g,'').replace(/(<wp:docPr\b[^>]*\bid=")[^"]+("[^>]*>)/g,(_,a,b)=>a+(++counter)+b);
+  let xml=markedQuestion(q.xml,q.answer,q.number).replace(/<w:numPr[\s\S]*?<\/w:numPr>/g,'').replace(/<w:pStyle[^>]*\/>/g,'').replace(/<w:rStyle[^>]*\/>/g,'').replace(/(<wp:docPr\b[^>]*\bid=")[^"]+("[^>]*>)/g,(_,a,b)=>a+(++counter)+b);
   const sourceRels=source.file('word/_rels/document.xml.rels');
   const docRels=sourceRels?Array.from(parse(sourceRels.asText()).getElementsByTagName('Relationship')):[];
   xml=xml.replace(/\b(r:embed|r:id|r:link)="([^"]+)"/g,(match,attr,id)=>{
@@ -139,8 +142,15 @@ function generate(selected,title,set) {
    const newId='rId'+(++counter), dest='media/'+counter+'-'+target.split('/').pop();out.file('word/'+dest,entry.asUint8Array());
    rels.push(`<Relationship Id="${newId}" Type="${esc(rel.getAttribute('Type'))}" Target="${esc(dest)}"/>`);return `${attr}="${newId}"`;
   });
-  body+=paragraph(`Question ${index+1}`,true)+xml;
+  body+=paragraph(`Question ${index+1}.`,true,true)+xml;
  });
+ const cell=(s,header=false)=>`<w:tc><w:tcPr><w:tcW w:w="2400" w:type="dxa"/>${header?'<w:shd w:fill="E7E6E6"/>':''}</w:tcPr>${paragraph(s,header)}</w:tc>`;
+ const row=(values,header=false)=>'<w:tr>'+ (header?'<w:trPr><w:tblHeader/></w:trPr>':'<w:trPr><w:cantSplit/></w:trPr>')+values.map(s=>cell(s,header)).join('')+'</w:tr>';
+ const half=Math.ceil(selected.length/2);
+ body+='<w:p><w:r><w:br w:type="page"/></w:r></w:p>'+paragraph('Answer Key - Set '+set,true);
+ body+='<w:tbl><w:tblPr><w:tblW w:w="9600" w:type="dxa"/><w:tblBorders>'+['top','left','bottom','right','insideH','insideV'].map(n=>`<w:${n} w:val="single" w:sz="4" w:color="BFBFBF"/>`).join('')+'</w:tblBorders></w:tblPr><w:tblGrid>'+Array(4).fill('<w:gridCol w:w="2400"/>').join('')+'</w:tblGrid>'+row(['Question No.','Correct Option','Question No.','Correct Option'],true);
+ for(let i=0;i<half;i++)body+=row([i+1,selected[i].answer,i+half<selected.length?i+half+1:'',selected[i+half]?.answer||'']);
+ body+='</w:tbl>';
  body+='<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1000" w:right="1000" w:bottom="1000" w:left="1000"/></w:sectPr>';
  namespaceAttrs.set('xmlns:w',ns);namespaceAttrs.set('xmlns:r','http://schemas.openxmlformats.org/officeDocument/2006/relationships');
  out.file('word/document.xml',`<?xml version="1.0" encoding="UTF-8"?><w:document ${Array.from(namespaceAttrs).map(([k,v])=>`${k}="${esc(v)}"`).join(' ')}><w:body>${body}</w:body></w:document>`);

@@ -2,4 +2,5 @@ data/final-archive-import/
 data/latest-archive-import/
 data/test-runs/
 node_modules/
+output/
 *.log

@@ -28,7 +28,7 @@ test('unused RM placeholders do not block valid subject questions',()=>{
  const buffer=z.generate({type:'nodebuffer'}),info=inspectForDepartment(buffer,linked);assert.equal(info.valid,true);assert.equal(info.questions.length,25);assert.ok(info.warnings.length);
  assert.equal(validateTemplate(buffer,linked,info).passed,true);
 });
-test('option labels are nonblocking while incorrect question count is rejected',()=>{
+test('option labels and question-count diagnostics are returned for review',()=>{
  const formatting=fixture([['Subject-Specific Questions',25]],'A) one A) two C) three D) four');
  const formattingResult=validateTemplate(formatting,linked,inspectForDepartment(formatting,linked));assert.equal(formattingResult.passed,true);assert.ok(formattingResult.option_errors.length);
  const count=fixture([['Subject-Specific Questions',24]]),countResult=validateTemplate(count,linked,inspectForDepartment(count,linked));assert.equal(countResult.passed,false);assert.ok(countResult.errors.length);

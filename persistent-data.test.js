@@ -16,6 +16,7 @@ function memoryCloud(){
  };
 }
 async function schema(db){
+ await run(db,'CREATE TABLE IF NOT EXISTS portal_users(id INTEGER PRIMARY KEY,username TEXT,name TEXT,email TEXT,role TEXT,campus_id INTEGER,department_id INTEGER,created_by INTEGER,created_at TEXT)');
  await run(db,'CREATE TABLE IF NOT EXISTS papers(id TEXT PRIMARY KEY,path TEXT,label TEXT)');
  await run(db,'CREATE TABLE IF NOT EXISTS templates(set_name TEXT PRIMARY KEY,path TEXT)');
  await run(db,'CREATE TABLE IF NOT EXISTS generations(id TEXT PRIMARY KEY,path TEXT)');
@@ -48,10 +49,11 @@ test('recovery handles added columns and preserves removal, password and audit r
  const {instance}=await setup(t);const a=await instance('first');await run(a.db,'ALTER TABLE papers ADD COLUMN deleted_at TEXT');await a.recoverSeed();
  await a.use(async()=>{
   await run(a.db,"UPDATE papers SET deleted_at='2026-10-12T00:00:00Z' WHERE id='past'");
+  await run(a.db,"INSERT INTO portal_users VALUES (10000,'new-hod','New HoD','new@example.test','hod',2,NULL,3,'2026-10-13')");
   await run(a.db,"INSERT INTO user_credentials VALUES (10,'opaque-hash',2,0,'2026-10-12',10)");
   await run(a.db,"INSERT INTO audit_events VALUES ('event',10,'hod','HoD','account.password_changed','account','10','{}','2026-10-12')");await a.commit();
  });
- const b=await instance('restart');await b.recoverSeed();assert.ok((await all(b.db,"SELECT deleted_at FROM papers WHERE id='past'"))[0].deleted_at);assert.equal((await all(b.db,'SELECT version FROM user_credentials'))[0].version,2);assert.equal((await all(b.db,'SELECT action FROM audit_events'))[0].action,'account.password_changed');
+ const b=await instance('restart');await b.recoverSeed();assert.ok((await all(b.db,"SELECT deleted_at FROM papers WHERE id='past'"))[0].deleted_at);assert.equal((await all(b.db,'SELECT username FROM portal_users'))[0].username,'new-hod');assert.equal((await all(b.db,'SELECT version FROM user_credentials'))[0].version,2);assert.equal((await all(b.db,'SELECT action FROM audit_events'))[0].action,'account.password_changed');
 });
 test('an empty remote database recovers the archive and keeps a backup',async t=>{
  const {cloud,instance}=await setup(t);const a=await instance('first');

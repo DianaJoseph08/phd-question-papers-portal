@@ -73,7 +73,7 @@ class PersistentData{
    await run(this.db,'ATTACH DATABASE ? AS recovery',[seedFile]);
    try{
     // Cloud records win on identical primary keys. Recover missing rows only.
-    for(const table of ['papers','templates','generations','screenings','custom_departments','user_credentials','audit_events']){
+    for(const table of ['papers','templates','generations','screenings','custom_departments','portal_users','user_credentials','audit_events']){
      const exists=await all(this.db,"SELECT name FROM recovery.sqlite_master WHERE type='table' AND name=?",[table]);
      if(exists.length){
       const target=await all(this.db,`PRAGMA main.table_info(${table})`),seedColumns=await all(this.db,`PRAGMA recovery.table_info(${table})`);

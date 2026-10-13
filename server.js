@@ -34,7 +34,7 @@ const all=(d,sql,args=[])=>new Promise((resolve,reject)=>d.all(sql,args,(e,r)=>e
 const run=(sql,args=[])=>new Promise((resolve,reject)=>persistence.db.run(sql,args,function(e){e?reject(e):resolve(this)}));
 const app=express(), sessions=new Map(), attempts=new Map();
 const route=method=>(url,...handlers)=>{const action=handlers.pop();app[method](url,...handlers,(req,res,next)=>persistence.use(async()=>{
- departments=await registry.load();await ensurePortalSchema();
+ await ensurePortalSchema();await accounts.load();audit.users=accounts.users;registry.hods=accounts.users.filter(u=>u.role==='hod').map(({password:ignored,...u})=>u);departments=await registry.load();
  if(req.token&&!await accounts.validSession(req.user.id,req.session.version)){sessions.delete(req.token);return res.status(401).json({error:'Your password changed. Please sign in again.'});}
  if(req.token&&!['/api/state','/api/password','/api/logout'].includes(req.path)){
   if(req.user.must_change_password)return res.status(403).json({error:'Change your temporary password before using the portal.'});
@@ -100,8 +100,13 @@ post('/api/users/:id/reset-password',requireAdmin,async(req,res)=>{
  revokeSessions(target.id);if(target.id===req.user.id)res.clearCookie('qp_session');res.json({ok:true,signed_out:target.id===req.user.id});
 });
 post('/api/departments',(req,res,next)=>{if(!canManageDepartments(req.user))return res.status(403).json({error:'Only Suresh, Ruby or the super administrator can add departments.'});next();},async(req,res)=>{
- const department=await registry.create(req.body,req.user.id);
- await audit.log(req.user,'department.added','department',department.id,{department:department.name,campus:department.campus,institution:department.institution,hod_user_id:department.hod_user_id});
+ let department;await run('SAVEPOINT department_add');
+ try{
+  const body={...req.body};
+  if(body.new_hod){const user=await accounts.createHod(body.new_hod,body.campus_id,req.user.id);registry.hods=accounts.users.filter(u=>u.role==='hod').map(({password:ignored,...u})=>u);body.hod_user_id=user.id;await audit.log(req.user,'account.added','account',user.id,{username:user.username,name:user.name,email:user.email,campus_id:user.campus_id,role:'hod'});}
+  department=await registry.create(body,req.user.id);
+  await audit.log(req.user,'department.added','department',department.id,{department:department.name,campus:department.campus,institution:department.institution,hod_user_id:department.hod_user_id});await run('RELEASE department_add');
+ }catch(e){await run('ROLLBACK TO department_add');await run('RELEASE department_add');await accounts.load();registry.hods=accounts.users.filter(u=>u.role==='hod').map(({password:ignored,...u})=>u);throw e;}
  await persistence.commit();departments=await registry.load();res.status(201).json({department});
 });
 get('/api/storage-status',requireAdmin,async(req,res)=>res.json({
@@ -119,7 +124,7 @@ async function screeningFor(department,info,set) {
   const p=latest.get(d.id+'|'+session+'|'+set_name);
   if(!p||p.deleted_at){missing.push({campus:d.campus,session,set:set_name,reason:p?'Removed by administrator':'Not uploaded'});continue;}
   let archiveFile;try{archiveFile=await ensureFileLocal(p.path);}catch(e){if(cloudStorage.enabled){const error=Error('An archived Word file could not be loaded from cloud storage. Please retry before submitting.');error.status=503;throw error;}missing.push({campus:d.campus,session,set:set_name,reason:'Archive could not be read; administrator review is needed'});continue;}
-  let parsed;try{parsed=inspectForDepartment(fs.readFileSync(archiveFile),d);}catch(e){missing.push({campus:d.campus,session,set:set_name,reason:'Archive could not be read; administrator review is needed'});continue;}
+  let parsed;try{parsed=inspectForDepartment(fs.readFileSync(archiveFile),d,{includeAnswers:false});}catch(e){missing.push({campus:d.campus,session,set:set_name,reason:'Archive could not be read; administrator review is needed'});continue;}
   if(!parsed.valid)missing.push({campus:d.campus,session,set:set_name,reason:'Archive extraction is incomplete or uses a different historical format; readable questions were still checked'});
   if(parsed.questions.length)archives.push({...p,campus:d.campus,questions:parsed.questions.filter(q=>!placeholder(q))});
  }
@@ -129,12 +134,13 @@ async function screeningFor(department,info,set) {
  return report;
 }
 function rejectMatches(report){if(report.rejected){const e=Error('Upload rejected: '+report.matched_count+' questions match the past two sessions. The maximum allowed is 10. Revise the matched questions and upload again.');e.status=422;e.details={screening:report};throw e;}}
-async function assessSubmission(d,buffer,info,set){
+async function assessSubmission(d,buffer,info,set,{forGeneration=false}={}){
  // Always return the match report for readable questions, even if counts need correction.
  const report=await screeningFor(d,info,set);
  report.template=validateTemplate(buffer,d,info);
  rejectMatches(report);
- if(!report.template.passed){const e=Error('The question count or sections need correction. See the repeat-check results and detected counts.');e.status=422;e.details={screening:report,template:report.template};throw e;}
+ if(forGeneration&&!report.template.passed){const e=Error('This saved paper needs question count or section corrections before final generation.');e.status=422;e.details={screening:report,template:report.template};throw e;}
+ report.template.advisory=true;
  return report;
 }
 async function store(req,buffer,name){
@@ -142,7 +148,11 @@ async function store(req,buffer,name){
  const filenameSet=setFromFilename(name);
  if(req.body.kind==='submission'&&filenameSet&&filenameSet!==req.body.set_name){const e=Error('This filename identifies Set '+filenameSet+', but Set '+req.body.set_name+' is selected. Select Set '+filenameSet+' and upload again. Your existing papers have not been changed.');e.status=422;e.details={expected_set:filenameSet};throw e;}
  const info=inspectForDepartment(buffer,d);let report=null;
- if(req.body.kind==='submission')report=await assessSubmission(d,buffer,info,req.body.set_name);
+ if(req.body.kind==='submission'){
+  report=await assessSubmission(d,buffer,info,req.body.set_name);
+  const note=String(req.body.note||'').trim();if(note.length>1000)throw Error('Keep your submission remark within 1000 characters.');
+  report.submission_note=note;
+ }
  const id=crypto.randomUUID(),file=path.join(data,'files',id+'.docx');fs.writeFileSync(file,buffer);
  const previous=(await all(persistence.db,'SELECT id,deleted_at FROM papers WHERE department_id=? AND session=? AND set_name=? AND kind=? ORDER BY created_at DESC,rowid DESC LIMIT 1',[d.id,req.body.session,req.body.set_name,req.body.kind]))[0];
  await cloudStorage.putDocument(file,'files/'+id+'.docx');
@@ -169,7 +179,7 @@ get('/api/papers/:id/:action',async(req,res)=>{
  if(req.params.action!=='preview')return res.status(404).end();
  const pbuf=fs.readFileSync(localPath),info=inspectForDepartment(pbuf,d);res.json({paper:{...p,path:undefined},template:p.kind==='submission'?validateTemplate(pbuf,d,info):null,screening:JSON.parse((await all(persistence.db,'SELECT report FROM screenings WHERE paper_id=?',[p.id]))[0]?.report||'null'),counts:info.counts,valid:info.valid,questions:info.questions.map(({section,text})=>({section,text})),text:require('./papers').text(new (require('@xmldom/xmldom').DOMParser)().parseFromString(new(require('pizzip'))(pbuf).file('word/document.xml').asText(),'application/xml'))});
 });
-post('/api/papers/:id/review',requireAdmin,async(req,res)=>{const p=(await all(persistence.db,'SELECT * FROM papers WHERE id=?',[req.params.id]))[0];if(!p||p.deleted_at||p.kind!=='submission')throw Error('Only active submissions can be approved.');const d=departments.find(d=>d.id===p.department_id),localPath=await ensureFileLocal(p.path),buffer=fs.readFileSync(localPath),info=inspectForDepartment(buffer,d),report=await assessSubmission(d,buffer,info,p.set_name);await run('INSERT OR REPLACE INTO screenings VALUES (?,?)',[p.id,JSON.stringify(report)]);await run('UPDATE papers SET reviewed=1 WHERE id=?',[p.id]);await audit.log(req.user,'paper.approved','paper',p.id,{filename:p.original_name,department:d.name,campus:d.campus,set:p.set_name,matched_questions:report.matched_count});await persistence.commit();res.json({ok:true});});
+post('/api/papers/:id/review',requireAdmin,async(req,res)=>{const p=(await all(persistence.db,'SELECT * FROM papers WHERE id=?',[req.params.id]))[0];if(!p||p.deleted_at||p.kind!=='submission')throw Error('Only active submissions can be approved.');const d=departments.find(d=>d.id===p.department_id),localPath=await ensureFileLocal(p.path),buffer=fs.readFileSync(localPath),info=inspectForDepartment(buffer,d),report=await assessSubmission(d,buffer,info,p.set_name);const savedReport=(await all(persistence.db,'SELECT report FROM screenings WHERE paper_id=?',[p.id]))[0];report.submission_note=JSON.parse(savedReport?.report||'{}').submission_note||'';await run('INSERT OR REPLACE INTO screenings VALUES (?,?)',[p.id,JSON.stringify(report)]);await run('UPDATE papers SET reviewed=1 WHERE id=?',[p.id]);await audit.log(req.user,'paper.approved','paper',p.id,{filename:p.original_name,department:d.name,campus:d.campus,set:p.set_name,matched_questions:report.matched_count});await persistence.commit();res.json({ok:true});});
 post('/api/templates/:set',requireAdmin,upload.single('file'),async(req,res)=>{if(!['A','B'].includes(req.params.set)||!req.file||!req.file.originalname.toLowerCase().endsWith('.docx'))throw Error('Select a Set A/B Word template.');inspect(req.file.buffer);const file=path.join(data,'files',crypto.randomUUID()+'.docx');fs.writeFileSync(file,req.file.buffer);await cloudStorage.putDocument(file,'files/'+path.basename(file));await run('INSERT OR REPLACE INTO templates VALUES (?,?,?,?)',[req.params.set,req.file.originalname,file,new Date().toISOString()]);await audit.log(req.user,'template.uploaded','template',req.params.set,{filename:req.file.originalname,set:req.params.set});await persistence.commit();res.json({ok:true});});
 get('/api/templates/:set',async(req,res)=>{const t=(await all(persistence.db,'SELECT * FROM templates WHERE set_name=?',[req.params.set]))[0];if(!t)return res.status(404).json({error:'Template not uploaded.'});const localPath=await ensureFileLocal(t.path);res.download(localPath,t.original_name);});
 let inventory=[];
@@ -188,7 +198,9 @@ post('/api/generate',requireAdmin,async(req,res)=>{
   const p=latest.get(key);
   if(!p?.reviewed||p.deleted_at)throw Error('Generation needs approved Set '+sourceSet+' for '+d.campus+' / '+d.institution+' / '+d.name+(d.is_common?' from '+d.coordinator_name:'')+'. Subject submissions can be uploaded while Common RM is pending.');
   const localPath=await ensureFileLocal(p.path),buffer=fs.readFileSync(localPath),info=inspectForDepartment(buffer,d);
-  await assessSubmission(d,buffer,info,sourceSet);
+  await assessSubmission(d,buffer,info,sourceSet,{forGeneration:true});
+  const issues=info.questions.filter(q=>q.answer_error||!q.answer).map(q=>({filename:p.original_name,campus:d.campus,department:d.name,set:sourceSet,section:q.section,question:q.number||q.answer_key_number||info.questions.indexOf(q)+1,remark:q.answer_error||'Correct answer missing.'}));
+  if(issues.length){const e=Error('Correct these source answers before generating the final paper.');e.status=422;e.details={generation_issues:issues};throw e;}
   const pool={...p,path:localPath,campus:p.campus_id,paper_type:info.paper_type,questions:info.questions};checked.set(key,pool);return pool;
  }
  const pools=[];
@@ -209,7 +221,7 @@ post('/api/generate',requireAdmin,async(req,res)=>{
  const buffer=generate(chosen,department.name,set);fs.writeFileSync(file,buffer);
  await cloudStorage.putDocument(file,'files/'+id+'.docx');
  const distribution=JSON.stringify({Ramapuram:chosen.filter(q=>q.source.campus===1).length,Trichy:chosen.filter(q=>q.source.campus===2).length});
- const manifest=JSON.stringify(chosen.map((q,i)=>({number:i+1,section:q.section,campus:q.source.campus,paper_id:q.source.id,department_id:q.source.department_id,source_set:q.source.set_name,contributing_department_id:q.contributing_department_id||q.source.department_id,hash:q.hash,text:q.text})));
+ const manifest=JSON.stringify(chosen.map((q,i)=>({number:i+1,section:q.section,campus:q.source.campus,paper_id:q.source.id,department_id:q.source.department_id,source_set:q.source.set_name,source_question_number:q.source_number||q.number||q.answer_key_number,answer:q.answer,answer_source:q.answer_source,contributing_department_id:q.contributing_department_id||q.source.department_id,hash:q.hash,text:q.text})));
  await run('INSERT INTO generations (id,department_key,department_name,set_name,path,distribution,manifest) VALUES (?,?,?,?,?,?,?)',[id,departmentKey(department),department.name,set,file,distribution,manifest]);
  await audit.log(req.user,'paper.generated','generation',id,{department:department.name,set,distribution:JSON.parse(distribution)});
  await persistence.commit();
@@ -239,6 +251,7 @@ async function start(){
   for(const set of ['A','B']){if(!(await all(persistence.db,'SELECT * FROM templates WHERE set_name=?',[set])).length){const original=path.join(parent,'Question_Paper_Setting',`Rmp_Department name_Jan_2027_QP_Set_${set}.docx`);if(fs.existsSync(original)){const dest=path.join(data,'files',`initial-template-${set}.docx`);fs.copyFileSync(original,dest);await run('INSERT INTO templates VALUES (?,?,?,?)',[set,path.basename(original),dest,new Date().toISOString()]);}}}
   if(fs.existsSync(path.join(parent,'Question Papers 2026')))scan(path.join(parent,'Question Papers 2026'));
  const recovery=await persistence.recoverSeed();
+ await accounts.load();audit.users=accounts.users;
  await audit.bootstrap();
  console.log('[Storage] Ready:',JSON.stringify(recovery));
  const port=Number(process.env.PORT)||8080, host=process.env.HOST||'0.0.0.0';

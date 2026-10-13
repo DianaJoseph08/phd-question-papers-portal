@@ -16,16 +16,32 @@ function validateNewPassword(body){
  return password;
 }
 class Accounts{
- constructor({db,users}){Object.assign(this,{db,users});}
- async ensure(){await run(this.db(),`CREATE TABLE IF NOT EXISTS user_credentials (
+ constructor({db,users}){Object.assign(this,{db,users});this.base=users;}
+ async ensure(){await run(this.db(),`CREATE TABLE IF NOT EXISTS portal_users (
+  id INTEGER PRIMARY KEY,username TEXT NOT NULL UNIQUE COLLATE NOCASE,name TEXT NOT NULL,email TEXT NOT NULL,
+  role TEXT NOT NULL,campus_id INTEGER NOT NULL,department_id INTEGER,created_by INTEGER NOT NULL,created_at TEXT NOT NULL
+ )`);await run(this.db(),`CREATE TABLE IF NOT EXISTS user_credentials (
   user_id INTEGER PRIMARY KEY,password_hash TEXT NOT NULL,version INTEGER NOT NULL,
   must_change_password INTEGER NOT NULL DEFAULT 0,updated_at TEXT NOT NULL,changed_by INTEGER NOT NULL
  )`);}
+ async load(){this.users=[...this.base,...await all(this.db(),'SELECT id,username,name,email,role,campus_id,department_id FROM portal_users ORDER BY name')];return this.users;}
+ async createHod(body,campusId,adminId){
+  const name=typeof body.name==='string'?body.name.trim():'',username=typeof body.username==='string'?body.username.trim():'',email=typeof body.email==='string'?body.email.trim():'';
+  if(name.length<2||name.length>120)throw Error('Enter the new HoD name (2-120 characters).');
+  if(!/^[a-zA-Z0-9][a-zA-Z0-9._-]{2,63}$/.test(username))throw Error('Use a username of 3-64 letters, numbers, dots, underscores or hyphens.');
+  if(email.length>254||! /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))throw Error('Enter a valid HoD email address.');
+  if(![1,2].includes(Number(campusId)))throw Error('Select the new HoD campus.');
+  await this.load();if(this.users.some(u=>u.username.toLowerCase()===username.toLowerCase())){const e=Error('This username already exists. Choose another username or select the existing HoD.');e.status=409;throw e;}
+  const password=validateNewPassword({new_password:body.new_password,confirm_password:body.confirm_password});
+  const id=Math.max(9999,...this.users.map(u=>u.id))+1;
+  await run(this.db(),'INSERT INTO portal_users VALUES (?,?,?,?,?,?,?,?,?)',[id,username,name,email,'hod',Number(campusId),null,adminId,new Date().toISOString()]);
+  await this.setPassword(id,password,adminId,true);await this.load();return this.users.find(u=>u.id===id);
+ }
  async credential(id){return (await all(this.db(),'SELECT * FROM user_credentials WHERE user_id=?',[id]))[0];}
  async verify(user,password){
   if(!user||typeof password!=='string'||password.length>128)return false;
   const c=await this.credential(user.id);
-  return c?verifyHash(password,c.password_hash):safeEqual(password.trim(),String(user.password||''));
+  return c?verifyHash(password,c.password_hash):Boolean(user.password)&&safeEqual(password.trim(),String(user.password));
  }
  async authenticate(username,password){
   const user=this.users.find(u=>u.username.toLowerCase()===String(username||'').trim().toLowerCase());

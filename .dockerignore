@@ -7,6 +7,8 @@ node_modules/
 .git/
 *.log
 test*.js
+*.test.js
+output/
 integration-test.js
 ui-test.js
 deploy/

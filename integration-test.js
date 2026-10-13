@@ -13,9 +13,9 @@ function fixture(prefix,{research=false,full=false,repeat=0,researchRepeat=repea
   const repeats=section==='Research Methodology'?researchRepeat:repeat;
   body+=p(section);for(let i=1;i<=count;i++)body+=p(`${i}. ${rephrased?`What result follows with sample ${i} from experiment ${i<=repeats?101:prefix}?`:`Which result follows from experiment ${i<=repeats?101:prefix} with sample ${i}?`} A) alpha ${invalid?'':'B) beta'} C) gamma D) delta`);
  }
- body+=p('Answer Key')+p('1 A');const z=new Zip();z.file('word/document.xml',`<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>${body}</w:body></w:document>`);return z.generate({type:'nodebuffer'});
+ body+=p('Answer Key');for(let i=1;i<=count*(full?2:1);i++)body+=p(i+' '+['A','B','C','D'][(i-1)%4]);const z=new Zip();z.file('word/document.xml',`<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>${body}</w:body></w:document>`);return z.generate({type:'nodebuffer'});
 }
-async function upload(cookie,department,set,buffer,archive=false,name='fixture.docx'){const f=new FormData();for(const [k,v] of Object.entries({department_id:department,set_name:set,session:archive?'January 2026':'January 2027',kind:archive?'archive':'submission'}))f.set(k,v);f.set('file',new Blob([buffer]),name);return request(cookie,'/papers',f);}
+async function upload(cookie,department,set,buffer,archive=false,name='fixture.docx',note=''){const f=new FormData();for(const [k,v] of Object.entries({department_id:department,set_name:set,session:archive?'January 2026':'January 2027',kind:archive?'archive':'submission'}))f.set(k,v);f.set('file',new Blob([buffer]),name);f.set('note',note);return request(cookie,'/papers',f);}
 async function startServer(port){
  base='http://127.0.0.1:'+port;
  server=spawn(process.execPath,['server.js'],{cwd:__dirname,env:{...process.env,PORT:String(port),HOST:'127.0.0.1',ADMISSIONS_DB:sourceFile,QUESTION_PAPER_DATA_DIR:path.join(dir,'app')},windowsHide:true,stdio:['ignore','pipe','pipe']});
@@ -44,7 +44,7 @@ async function startServer(port){
   assert.equal((await upload(hc,1,'A',fixture(101),true)).status,400);
   assert.equal((await upload(hc,201,'A',fixture(200,{research:true}))).status,400);
   assert.equal((await upload(vc,202,'A',fixture(200,{research:true}))).status,400);
-  assert.equal((await upload(mc,13,'A',fixture(200))).status,422,'No Common RM mapping means full paper is required');
+  assert.equal((await upload(mc,13,'A',fixture(200))).status,200,'Count mismatch is advisory for uploads');
   // A named Set B must not hide the coordinator's Set A when the wrong dropdown is selected.
   const commonA=await upload(vc,201,'A',fixture(5100,{research:true}),false,'Rmp_All Department _Jan_2027_QP_Set_A.docx');assert.equal(commonA.status,200);
   const wrongSet=await upload(vc,201,'A',fixture(5200,{research:true}),false,'Rmp_All Department _Jan_2027_QP_Set_B.docx');assert.equal(wrongSet.status,422);assert.equal(wrongSet.data.expected_set,'B');
@@ -57,9 +57,9 @@ async function startServer(port){
   assert.equal((await request(hc,`/papers/${accepted.data.id}/download`)).status,200);
   assert.equal((await request(tc,`/papers/${accepted.data.id}/download`)).status,404);
   const before=(await request(hc,'/state')).data.papers.find(p=>p.kind==='submission').id;
-  const malformed=await upload(hc,1,'A',fixture(200,{invalid:true}));assert.equal(malformed.status,200,JSON.stringify(malformed.data));assert.equal(malformed.data.screening.matched_count,0);assert.equal(malformed.data.screening.template.passed,true);assert.notEqual((await request(hc,'/state')).data.papers.find(p=>p.kind==='submission').id,before);
+  const malformed=await upload(hc,1,'A',fixture(200,{invalid:true}),false,'fixture.docx','Please check the option formatting.');assert.equal(malformed.status,200,JSON.stringify(malformed.data));assert.equal(malformed.data.screening.matched_count,0);assert.equal(malformed.data.screening.template.passed,true);assert.notEqual((await request(hc,'/state')).data.papers.find(p=>p.kind==='submission').id,before);
   const formattingPreview=await request(ac,`/papers/${malformed.data.id}/preview`);assert.equal(formattingPreview.status,200);assert.equal(formattingPreview.data.template.passed,true);assert.equal(formattingPreview.data.template.option_errors.length,25);assert.equal(formattingPreview.data.template.option_errors[0].missing,'B');assert.equal(formattingPreview.data.template.option_errors[0].section,'subject');assert.equal(formattingPreview.data.screening.template.option_errors[0].missing,'B');
-  assert.equal((await request(ac,`/papers/${malformed.data.id}/review`,{})).status,200,'Formatting remarks must not block admin approval');
+  assert.equal((await request(ac,`/papers/${malformed.data.id}/review`,{})).status,200,'Formatting remarks must not block admin approval');assert.equal((await request(ac,`/papers/${malformed.data.id}/preview`)).data.screening.submission_note,'Please check the option formatting.');
   const archive=await upload(ac,1,'A',fixture(101),true);assert.equal(archive.status,200);
   for(const n of [10,11]){const result=await upload(hc,1,'A',fixture(200,{repeat:n}));assert.equal(result.status,n===10?200:422,JSON.stringify(result.data));assert.equal(result.data.screening.matched_count,n);if(n===11){assert.ok(result.data.screening.matches.every(m=>m.past_file==='fixture.docx'&&m.past_session==='January 2026'));assert.equal(result.data.id,undefined);}}
   // Trichy must screen the same cross-campus archive as Ramapuram, with formatting nonblocking.
@@ -69,8 +69,8 @@ async function startServer(port){
   }
   // Count corrections must never hide the repetition table, including a no-match count error.
   for(const [n,cookie,d] of [[11,tc,30],[1,tc,30],[0,tc,30],[0,hc,1]]){
-   const result=await upload(cookie,d,'B',fixture(999,{repeat:n,count:24,invalid:true}));assert.equal(result.status,422);assert.equal(result.data.screening.matched_count,n);assert.equal(result.data.screening.template.passed,false);assert.equal(result.data.screening.template.counts.subject,24);
-   assert.equal(result.data.screening.rejected,n>10);assert.equal(result.data.id,undefined);
+   const result=await upload(cookie,d,'B',fixture(999,{repeat:n,count:24,invalid:true}));assert.equal(result.status,n>10?422:200);assert.equal(result.data.screening.matched_count,n);assert.equal(result.data.screening.template.passed,false);assert.equal(result.data.screening.template.counts.subject,24);
+   assert.equal(result.data.screening.rejected,n>10);assert.equal(Boolean(result.data.id),n<=10);
   }
   const facultyCases=[[38,'commerce-hod',-203,'Commerce'],[44,'health-hod',-204,'Medical Imaging Technology'],[43,'ot-hod',-204,'Occupational Therapy'],[102,'management-hod',null,'Management Studies']];
   for(const [d,user,common,name] of facultyCases){
@@ -120,13 +120,25 @@ async function startServer(port){
    assert.equal(manifest.questions.length,50);assert.equal(manifest.questions.filter(q=>q.section==='research').length,25);
    for(const q of manifest.questions){assert.ok(!allHashes.has(q.hash));allHashes.add(q.hash);assert.ok((q.section==='research'?[201,202]:[1,30]).includes(q.department_id));}
    for(const d of [1,30,201,202])for(const s of ['A','B'])assert.ok(manifest.questions.some(q=>q.department_id===d&&q.source_set===s));
-   const download=await request(ac,`/generations/${result.data.id}/download`);assert.equal(download.status,200);assert.equal(inspect(download.data).questions.length,50);
+   const download=await request(ac,`/generations/${result.data.id}/download`);assert.equal(download.status,200);const output=inspect(download.data);assert.equal(output.questions.length,50);assert.deepEqual(output.questions.map(q=>q.answer),manifest.questions.map(q=>q.answer));for(const q of manifest.questions)assert.equal(q.answer,['A','B','C','D'][(q.source_question_number-1)%4]);
    assert.equal((await request(hc,`/generations/${result.data.id}/download`)).status,403);
   }
   // Named administrators can add departments, archive their papers and assign existing HoDs.
   const sc=await login('suresh'),rc=await login('ruby');
   for(const cookie of [sc,rc]){const options=(await request(cookie,'/state')).data;assert.equal(options.can_manage_departments,true);assert.equal(options.institutions.length,7);assert.ok(options.hod_accounts.every(u=>!('password' in u)));}
   for(const cookie of [ac,hc,ic]){assert.equal((await request(cookie,'/departments',{name:'Unauthorized',institution_id:1})).status,403);assert.deepEqual((await request(cookie,'/state')).data.hod_accounts,[]);}
+  const createdAccounts=[];
+  for(const [cookie,campus,institution] of [[sc,1,1],[rc,2,2]]){
+   const new_hod={name:'New HoD '+campus,username:'new-hod-'+campus,email:'new'+campus+'@example.test',new_password:'Temporary new-HoD password!',confirm_password:'Temporary new-HoD password!'};
+   const rollback=await request(cookie,'/departments',{name:'Invalid faculty',campus_id:campus,institution_id:999,new_hod});assert.equal(rollback.status,400);assert.ok(!(await request(cookie,'/users')).data.users.some(u=>u.username===new_hod.username));
+   const added=await request(cookie,'/departments',{name:'New Specialism '+campus,campus_id:campus,institution_id:institution,new_hod});assert.equal(added.status,201,JSON.stringify(added.data));createdAccounts.push({new_hod,id:added.data.department.id});
+   assert.equal((await request(cookie,'/departments',{name:'Another '+campus,campus_id:campus,institution_id:institution,new_hod:{...new_hod,username:new_hod.username.toUpperCase()}})).status,409);
+   const temporary=await login(new_hod.username,new_hod.new_password);assert.equal((await request(temporary,'/state')).data.user.must_change_password,true);assert.equal((await upload(temporary,added.data.department.id,'A',fixture(90000))).status,403);
+   const password='Changed new-HoD password!';assert.equal((await request(temporary,'/password',{current_password:new_hod.new_password,new_password:password,confirm_password:password})).status,200);
+   const own=(await request(temporary,'/state')).data;assert.deepEqual(own.departments.map(d=>d.id),[added.data.department.id]);assert.equal(own.departments[0].campus_id,campus);
+   const paper=await upload(temporary,added.data.department.id,'A',fixture(92000,{count:24,invalid:true}),false,'fixture.docx','Template mismatch supplied for admin review.');assert.equal(paper.status,200);assert.equal(paper.data.screening.template.passed,false);assert.equal((await request(cookie,`/papers/${paper.data.id}/review`,{})).status,200);
+   const viewed=(await request(cookie,`/papers/${paper.data.id}/preview`)).data;assert.equal(viewed.screening.submission_note,'Template mismatch supplied for admin review.');
+  }
   const newRmp=await request(sc,'/departments',{name:' Civil   Engineering ',campus_id:1,institution_id:1,hod_user_id:10});assert.equal(newRmp.status,201,JSON.stringify(newRmp.data));assert.equal(newRmp.data.department.name,'Civil Engineering');assert.equal(newRmp.data.department.common_rm_id,201);
   const newTry=await request(rc,'/departments',{name:'Civil Engineering',campus_id:2,institution_id:2,hod_user_id:11,common_rm_id:201});assert.equal(newTry.status,201);assert.equal(newTry.data.department.common_rm_id,202,'Coordinator cannot be overridden across campuses');
   assert.equal((await request(rc,'/departments',{name:'civil engineering',institution_id:1})).status,409);
@@ -182,13 +194,13 @@ async function startServer(port){
   const temporary=await login('try-hod',reset.new_password),temporaryState=(await request(temporary,'/state')).data;assert.equal(temporaryState.user.must_change_password,true);assert.deepEqual(temporaryState.papers,[]);assert.deepEqual(temporaryState.templates,[]);assert.equal((await upload(temporary,tryId,'A',fixture(90000))).status,403);assert.equal((await request(temporary,'/templates/A')).status,403);
   const tryPassword='new-try-password';assert.equal((await request(temporary,'/password',{current_password:reset.new_password,new_password:tryPassword,confirm_password:tryPassword})).status,200);assert.equal((await request(temporary,'/state')).data.user.must_change_password,false);
   const events=(await request(sc,'/audit?limit=100')).data;assert.ok(events.total>events.events.length);assert.ok(events.events.some(e=>e.action==='paper.removed'&&e.actor_username==='ruby'&&e.details.reason==='Incorrect test archive'));
-  for(const action of ['paper.uploaded','paper.replaced','paper.rejected','paper.approved','paper.generated','department.added','account.password_changed','account.password_reset'])assert.ok((await request(rc,'/audit?action='+action)).data.total>0,action);
+  for(const action of ['paper.uploaded','paper.replaced','paper.rejected','paper.approved','paper.generated','department.added','account.added','account.password_changed','account.password_reset'])assert.ok((await request(rc,'/audit?action='+action)).data.total>0,action);
   const uploadLogs=(await request(sc,'/audit?search=latest-archive.docx')).data.events;assert.ok(uploadLogs.some(e=>e.action==='paper.replaced'&&e.actor_username==='ruby'&&e.created_at));
   for(const secret of [hodPassword,tryPassword,reset.new_password,'fixture-password'])assert.ok(!JSON.stringify(events).includes(secret));
   assert.equal((await request(sc,'/users')).data.users.find(u=>u.id===11).password_status,'Changed securely');
   // A restart must retain new department assignments and uploaded archive metadata.
   await new Promise(resolve=>{server.once('exit',resolve);server.kill();});await startServer(port);
-  const restartedAdmin=await login('ruby'),restarted=(await request(restartedAdmin,'/state')).data;assert.equal(restarted.departments.filter(d=>d.is_custom).length,4);assert.ok(restarted.papers.some(p=>p.department_id===rmpId&&p.kind==='archive'));assert.ok(!restarted.papers.some(p=>p.department_id===unassigned.data.department.id));assert.ok((await request(await login('rmp-hod',hodPassword),'/state')).data.departments.some(d=>d.id===rmpId));await login('try-hod',tryPassword);assert.ok((await request(restartedAdmin,'/audit?action=account.password_reset')).data.total>0);assert.equal((await request(restartedAdmin,'/users')).data.users.find(u=>u.id===10).password_status,'Changed securely');assert.deepEqual(fs.readFileSync(sourceFile),accountSnapshot,'Admissions accounts must remain unchanged');
+  const restartedAdmin=await login('ruby'),restarted=(await request(restartedAdmin,'/state')).data;assert.equal(restarted.departments.filter(d=>d.is_custom).length,6);assert.ok(restarted.papers.some(p=>p.department_id===rmpId&&p.kind==='archive'));assert.ok(!restarted.papers.some(p=>p.department_id===unassigned.data.department.id));assert.ok((await request(await login('rmp-hod',hodPassword),'/state')).data.departments.some(d=>d.id===rmpId));await login('try-hod',tryPassword);assert.ok((await request(restartedAdmin,'/audit?action=account.password_reset')).data.total>0);assert.equal((await request(restartedAdmin,'/users')).data.users.find(u=>u.id===10).password_status,'Changed securely');for(const account of createdAccounts)assert.deepEqual((await request(await login(account.new_hod.username,'Changed new-HoD password!'),'/state')).data.departments.map(d=>d.id),[account.id]);assert.deepEqual(fs.readFileSync(sourceFile),accountSnapshot,'Admissions accounts must remain unchanged');
   console.log('Integration passed: both-campus screening and generation, new/existing department grouping, admin-only activity/account pages, paper removal, password changes/resets, session revocation, immutable usernames, restart persistence and unchanged admissions database. Real app data was not changed.');
   if(process.argv.includes('--ui')){console.log('UI fixture available: '+base+' (use ruby / fixture-password). Send a newline to end.');await new Promise(resolve=>process.stdin.once('data',resolve));}
  }finally{

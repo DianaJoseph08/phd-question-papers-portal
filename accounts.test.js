@@ -37,3 +37,13 @@ test('historical activity is backfilled once with its original actor and UTC tim
  await audit.bootstrap();await audit.bootstrap();const result=await audit.list();assert.equal(result.total,2);
  const paper=result.events.find(e=>e.target_type==='paper');assert.equal(paper.actor_username,'hod');assert.equal(paper.created_at,'2026-01-10T05:00:00.000Z');assert.equal(paper.details.historical,true);
 });
+
+test('new HoD accounts have immutable unique usernames and securely stored temporary passwords',async t=>{
+ const {accounts,db}=await setup(t),body={name:'New HoD',username:'new.hod',email:'new@example.test',new_password:'Temporary fixture password!',confirm_password:'Temporary fixture password!'};
+ const u=await accounts.createHod(body,2,1);assert.equal(u.role,'hod');assert.equal(u.campus_id,2);assert.ok(u.id>=10000);assert.equal('password' in u,false);
+ const a=await accounts.authenticate(body.username,body.new_password);assert.equal(a.user.must_change_password,true);assert.equal(await accounts.authenticate(body.username,''),null);
+ await assert.rejects(accounts.createHod({...body,username:'NEW.HOD'},2,1),e=>e.status===409);
+ await assert.rejects(accounts.createHod({...body,username:'HOD'},2,1),e=>e.status===409);
+ await accounts.load();assert.ok((await accounts.list([])).some(x=>x.id===u.id&&x.password_status==='Change required'));
+ await run(db,'DELETE FROM user_credentials WHERE user_id=?',[u.id]);assert.equal(await accounts.authenticate(body.username,''),null);
+});
