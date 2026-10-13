@@ -27,6 +27,7 @@ test('generation success provides a direct download and identifies automatic Com
  vm.runInContext(fs.readFileSync(require.resolve('./public/matrix.js'),'utf8'),context);
  context.result={id:'fixture-id',question_count:50,common_rm:[{campus:'Ramapuram',category:'Common RM',coordinator:'Vani <name>'}]};
  vm.runInContext('showGeneratedPaper(result)',context);assert.ok(dialog.open);assert.ok(content.innerHTML.includes('/api/generations/fixture-id/download'));assert.ok(content.innerHTML.includes('Download generated Word paper'));assert.ok(content.innerHTML.includes('included automatically'));assert.ok(content.innerHTML.includes('Vani &lt;name>'));
+ assert.ok(content.innerHTML.includes('data-source-record="fixture-id"'));assert.ok(!content.innerHTML.includes('/manifest'));
 });
 test('answer remarks show the source question, key, bold option and readable evidence safely',()=>{
  const context=vm.createContext({escape:s=>String(s??'').replaceAll('<','&lt;')});vm.runInContext(fs.readFileSync(require.resolve('./public/matrix.js'),'utf8'),context);

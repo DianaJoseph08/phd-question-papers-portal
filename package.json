@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "start": "node server.js",
-    "test": "node --test test.js screening.test.js matrix.test.js access.test.js submission-policy.test.js upload-set.test.js persistent-data.test.js accounts.test.js answers.test.js template-paper.test.js",
+    "test": "node --test test.js screening.test.js matrix.test.js access.test.js submission-policy.test.js upload-set.test.js persistent-data.test.js accounts.test.js answers.test.js template-paper.test.js source-record.test.js",
     "test:integration": "node integration-test.js"
   },
   "dependencies": {
