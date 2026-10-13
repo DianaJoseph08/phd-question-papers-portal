@@ -126,6 +126,7 @@ async function startServer(port){
   const allHashes=new Set();
   for(const set_name of ['A','B']){
    const result=await request(ac,'/generate',{department_id:1,set_name});assert.equal(result.status,200,JSON.stringify(result.data));assert.deepEqual(result.data.distribution,{Ramapuram:25,Trichy:25});assert.equal(result.data.template_name,'Admin-Template-'+set_name+'.docx');assert.equal(result.data.question_count,50);assert.equal(result.data.common_rm.length,2);
+   const saved=await request(ac,'/generations');assert.equal(saved.status,200);assert.ok(saved.data.some(g=>g.id===result.data.id&&g.set_name===set_name));assert.equal((await request(hc,'/generations')).status,403);assert.equal((await request('','/generations')).status,401);
    const manifest=(await request(ac,`/generations/${result.data.id}/manifest`)).data;
    const browserRecord=await fetch(base+`/api/generations/${result.data.id}/manifest`,{headers:{Cookie:ac,Accept:'text/html'}});assert.equal(browserRecord.status,200);assert.ok(browserRecord.headers.get('content-type').includes('text/html'));assert.ok((await browserRecord.text()).includes('/source-record-page.js'));
    const explicitJson=await fetch(base+`/api/generations/${result.data.id}/manifest?format=json`,{headers:{Cookie:ac,Accept:'text/html'}});assert.equal(explicitJson.status,200);assert.equal((await explicitJson.json()).questions.length,50);
@@ -179,12 +180,25 @@ async function startServer(port){
    const repeated=await upload(hodCookie,d,'A',fixture(prefix,{repeat:11}));assert.equal(repeated.status,422);assert.equal(repeated.data.screening.matched_count,11);
    for(const [index,set] of ['A','B'].entries()){const fresh=await upload(hodCookie,d,set,fixture(prefix+index));assert.equal(fresh.status,200);assert.equal((await request(sc,`/papers/${fresh.data.id}/review`,{})).status,200);}
   }
-  const civilHashes=new Set();
+  const civilHashes=new Set(),civilFinals=[];
   for(const set_name of ['A','B']){
    const newFinal=await request(rc,'/generate',{department_id:rmpId,set_name});assert.equal(newFinal.status,200,JSON.stringify(newFinal.data));assert.deepEqual(newFinal.data.distribution,{Ramapuram:25,Trichy:25});
    const manifest=(await request(rc,`/generations/${newFinal.data.id}/manifest`)).data;
+   civilFinals.push({generation:newFinal.data,manifest});
    for(const q of manifest.questions){assert.ok(!civilHashes.has(q.hash));civilHashes.add(q.hash);}
    for(const d of [rmpId,tryId,201,202])for(const s of ['A','B'])assert.ok(manifest.questions.some(q=>q.department_id===d&&q.source_set===s));
+  }
+  // A superseded A may contain questions now used by final B. Historical drafts
+  // must not exhaust the pool; only the current opposite final is excluded.
+  const retiredA=civilFinals[0].manifest.questions.map(q=>({...q})),oldQuestion=retiredA[0];
+  const swappedQuestion=civilFinals[1].manifest.questions.find(q=>q.section===oldQuestion.section&&q.campus===oldQuestion.campus&&q.department_id===oldQuestion.department_id&&q.source_set===oldQuestion.source_set);assert.ok(swappedQuestion);retiredA[0]={...swappedQuestion,number:oldQuestion.number};
+  const fixtureDb=new sqlite.Database(path.join(dir,'app','papers.db'));
+  await run(fixtureDb,'INSERT INTO generations (id,department_key,department_name,set_name,path,distribution,manifest,created_at) VALUES (?,?,?,?,?,?,?,?)',['superseded-civil-a','civil engineering|engineering','Civil Engineering','A',path.join(dir,'app','files',civilFinals[0].generation.id+'.docx'),JSON.stringify(civilFinals[0].generation.distribution),JSON.stringify(retiredA),'2000-01-01T00:00:00.000Z']);await close(fixtureDb);
+  let currentCivilA=civilFinals[0].manifest;
+  for(const set_name of ['B','A','B']){
+   const regenerated=await request(rc,'/generate',{department_id:rmpId,set_name});assert.equal(regenerated.status,200,JSON.stringify(regenerated.data));const record=(await request(rc,`/generations/${regenerated.data.id}/manifest`)).data;
+   const saved=(await request(rc,'/generations')).data,civil=saved.filter(g=>g.department_key==='civil engineering|engineering');assert.ok(civil.some(g=>g.id==='superseded-civil-a'),'Older records are preserved');assert.equal(civil.find(g=>g.set_name===set_name).id,regenerated.data.id);
+   if(set_name==='A')currentCivilA=record;else{const aHashes=new Set(currentCivilA.questions.map(q=>q.hash));assert.ok(record.questions.every(q=>!aHashes.has(q.hash)),'Current final A/B questions remain distinct');}
   }
   // A new department on the other campus must group with the existing admissions department.
   const newCyber=await request(rc,'/departments',{name:'Cybersecurity',institution_id:2,hod_user_id:11});assert.equal(newCyber.status,201);const cyberId=newCyber.data.department.id,cyber=await login('cyber-hod');

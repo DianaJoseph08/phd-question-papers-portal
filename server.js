@@ -101,6 +101,7 @@ get('/api/state',async(req,res)=>{
  res.json({user:req.user,can_use_papers:paperAccess(req.user),can_manage_departments:canManageDepartments(req.user),institutions:canManageDepartments(req.user)?registry.institutions:[],hod_accounts:canManageDepartments(req.user)?registry.hods:[],departments:admin(req.user)?departments:departments.filter(d=>scope(req.user,d)),papers:current.map(({path:ignored,...p})=>p),templates:paperAccess(req.user)?await all(persistence.db,'SELECT set_name,original_name,updated_at FROM templates'):[],generations:admin(req.user)?await all(persistence.db,'SELECT id,department_key,department_name,set_name,distribution,created_at FROM generations ORDER BY created_at DESC,rowid DESC'):[]});
 });
 function requireAdmin(req,res,next){if(!admin(req.user))return res.status(403).json({error:'Administrator access required.'});next();}
+get('/api/generations',requireAdmin,async(req,res)=>res.json(await all(persistence.db,'SELECT id,department_key,department_name,set_name,distribution,created_at FROM generations ORDER BY created_at DESC,rowid DESC')));
 get('/api/audit',requireAdmin,async(req,res)=>res.json(await audit.list(req.query)));
 get('/api/users',requireAdmin,async(req,res)=>res.json({users:await accounts.list(departments)}));
 post('/api/users/:id/reset-password',requireAdmin,async(req,res)=>{
@@ -239,7 +240,9 @@ post('/api/generate',requireAdmin,async(req,res)=>{
   pools.push({...source,section:'research',questions:source.questions.map(q=>({...q,contributing_department_id:department.id}))});
  }
  const sectionCampuses=Object.fromEntries(['research','subject'].map(section=>[section,[...new Set(pools.filter(p=>p.section===section).map(p=>p.campus))]]));
- const opposite=await all(persistence.db,'SELECT manifest FROM generations WHERE department_key=? AND set_name<>?',[departmentKey(department),set]);
+ // Keep the current final A/B pair distinct. Superseded drafts must not
+ // consume the available question pool when a final set is regenerated.
+ const opposite=await all(persistence.db,'SELECT manifest FROM generations WHERE department_key=? AND set_name<>? ORDER BY created_at DESC,rowid DESC LIMIT 1',[departmentKey(department),set]);
  const excluded=new Set(opposite.flatMap(g=>JSON.parse(g.manifest).map(q=>q.hash)));
  pools.forEach(p=>p.questions=p.questions.filter(q=>!excluded.has(q.hash)));
  const chosen=choose(pools,campusCount<2,set,department.is_common,sectionCampuses);const id=crypto.randomUUID(),file=path.join(data,'files',id+'.docx');
