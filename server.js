@@ -77,6 +77,17 @@ post('/api/password',async(req,res)=>{
  await audit.log(req.user,'account.password_changed','account',user.id,{username:user.username});await persistence.commit();
  revokeSessions(user.id,req.token);req.session.version=version;req.user.must_change_password=false;res.json({ok:true});
 });
+const submissionCountsCache=new Map();
+async function currentSubmissionCounts(p){
+ if(p.kind!=='submission')return p;
+ const d=departments.find(d=>d.id===p.department_id);
+ try{
+  const localPath=await ensureFileLocal(p.path),stat=fs.statSync(localPath),key=[p.id,stat.mtimeMs,stat.size,d.name,d.common_rm_id,d.is_common].join('|');
+  let parsed=submissionCountsCache.get(key);
+  if(!parsed){const info=inspectForDepartment(fs.readFileSync(localPath),d,{includeAnswers:false});parsed={counts:JSON.stringify(info.counts),valid:info.valid?1:0};if(submissionCountsCache.size>500)submissionCountsCache.clear();submissionCountsCache.set(key,parsed);}
+  return {...p,...parsed};
+ }catch(e){return {...p,count_warning:'Original document could not be read. Previously stored counts are shown.'};}
+}
 get('/api/state',async(req,res)=>{
  if(req.user.must_change_password)return res.json({user:req.user,can_use_papers:false,can_manage_departments:false,institutions:[],hod_accounts:[],departments:[],papers:[],templates:[],generations:[]});
  const rows=await all(persistence.db,`SELECT p.* FROM papers p WHERE p.deleted_at IS NULL AND NOT EXISTS (
@@ -86,7 +97,8 @@ get('/api/state',async(req,res)=>{
    AND (newer.created_at>p.created_at OR (newer.created_at=p.created_at AND newer.rowid>p.rowid))
  ) ORDER BY p.created_at DESC,p.rowid DESC`);
  const visible=rows.filter(p=>scope(req.user,departments.find(d=>d.id===p.department_id)||{})&&(admin(req.user)||p.kind==='archive'||p.uploaded_by===req.user.id||req.user.role==='coordinator'));
- res.json({user:req.user,can_use_papers:paperAccess(req.user),can_manage_departments:canManageDepartments(req.user),institutions:canManageDepartments(req.user)?registry.institutions:[],hod_accounts:canManageDepartments(req.user)?registry.hods:[],departments:admin(req.user)?departments:departments.filter(d=>scope(req.user,d)),papers:visible.map(({path:ignored,...p})=>p),templates:paperAccess(req.user)?await all(persistence.db,'SELECT set_name,original_name,updated_at FROM templates'):[],generations:admin(req.user)?await all(persistence.db,'SELECT id,department_name,set_name,distribution,created_at FROM generations ORDER BY created_at DESC'):[]});
+ const current=[];for(const p of visible)current.push(await currentSubmissionCounts(p));
+ res.json({user:req.user,can_use_papers:paperAccess(req.user),can_manage_departments:canManageDepartments(req.user),institutions:canManageDepartments(req.user)?registry.institutions:[],hod_accounts:canManageDepartments(req.user)?registry.hods:[],departments:admin(req.user)?departments:departments.filter(d=>scope(req.user,d)),papers:current.map(({path:ignored,...p})=>p),templates:paperAccess(req.user)?await all(persistence.db,'SELECT set_name,original_name,updated_at FROM templates'):[],generations:admin(req.user)?await all(persistence.db,'SELECT id,department_name,set_name,distribution,created_at FROM generations ORDER BY created_at DESC'):[]});
 });
 function requireAdmin(req,res,next){if(!admin(req.user))return res.status(403).json({error:'Administrator access required.'});next();}
 get('/api/audit',requireAdmin,async(req,res)=>res.json(await audit.list(req.query)));
@@ -179,7 +191,7 @@ get('/api/papers/:id/:action',async(req,res)=>{
  if(req.params.action!=='preview')return res.status(404).end();
  const pbuf=fs.readFileSync(localPath),info=inspectForDepartment(pbuf,d);res.json({paper:{...p,path:undefined},template:p.kind==='submission'?validateTemplate(pbuf,d,info):null,screening:JSON.parse((await all(persistence.db,'SELECT report FROM screenings WHERE paper_id=?',[p.id]))[0]?.report||'null'),counts:info.counts,valid:info.valid,questions:info.questions.map(({section,text})=>({section,text})),text:require('./papers').text(new (require('@xmldom/xmldom').DOMParser)().parseFromString(new(require('pizzip'))(pbuf).file('word/document.xml').asText(),'application/xml'))});
 });
-post('/api/papers/:id/review',requireAdmin,async(req,res)=>{const p=(await all(persistence.db,'SELECT * FROM papers WHERE id=?',[req.params.id]))[0];if(!p||p.deleted_at||p.kind!=='submission')throw Error('Only active submissions can be approved.');const d=departments.find(d=>d.id===p.department_id),localPath=await ensureFileLocal(p.path),buffer=fs.readFileSync(localPath),info=inspectForDepartment(buffer,d),report=await assessSubmission(d,buffer,info,p.set_name);const savedReport=(await all(persistence.db,'SELECT report FROM screenings WHERE paper_id=?',[p.id]))[0];report.submission_note=JSON.parse(savedReport?.report||'{}').submission_note||'';await run('INSERT OR REPLACE INTO screenings VALUES (?,?)',[p.id,JSON.stringify(report)]);await run('UPDATE papers SET reviewed=1 WHERE id=?',[p.id]);await audit.log(req.user,'paper.approved','paper',p.id,{filename:p.original_name,department:d.name,campus:d.campus,set:p.set_name,matched_questions:report.matched_count});await persistence.commit();res.json({ok:true});});
+post('/api/papers/:id/review',requireAdmin,async(req,res)=>{const p=(await all(persistence.db,'SELECT * FROM papers WHERE id=?',[req.params.id]))[0];if(!p||p.deleted_at||p.kind!=='submission')throw Error('Only active submissions can be approved.');const d=departments.find(d=>d.id===p.department_id),localPath=await ensureFileLocal(p.path),buffer=fs.readFileSync(localPath),info=inspectForDepartment(buffer,d),report=await assessSubmission(d,buffer,info,p.set_name);const savedReport=(await all(persistence.db,'SELECT report FROM screenings WHERE paper_id=?',[p.id]))[0];report.submission_note=JSON.parse(savedReport?.report||'{}').submission_note||'';await run('INSERT OR REPLACE INTO screenings VALUES (?,?)',[p.id,JSON.stringify(report)]);await run('UPDATE papers SET reviewed=1,counts=?,valid=? WHERE id=?',[JSON.stringify(info.counts),info.valid?1:0,p.id]);await audit.log(req.user,'paper.approved','paper',p.id,{filename:p.original_name,department:d.name,campus:d.campus,set:p.set_name,matched_questions:report.matched_count});await persistence.commit();res.json({ok:true});});
 post('/api/templates/:set',requireAdmin,upload.single('file'),async(req,res)=>{if(!['A','B'].includes(req.params.set)||!req.file||!req.file.originalname.toLowerCase().endsWith('.docx'))throw Error('Select a Set A/B Word template.');inspect(req.file.buffer);const file=path.join(data,'files',crypto.randomUUID()+'.docx');fs.writeFileSync(file,req.file.buffer);await cloudStorage.putDocument(file,'files/'+path.basename(file));await run('INSERT OR REPLACE INTO templates VALUES (?,?,?,?)',[req.params.set,req.file.originalname,file,new Date().toISOString()]);await audit.log(req.user,'template.uploaded','template',req.params.set,{filename:req.file.originalname,set:req.params.set});await persistence.commit();res.json({ok:true});});
 get('/api/templates/:set',async(req,res)=>{const t=(await all(persistence.db,'SELECT * FROM templates WHERE set_name=?',[req.params.set]))[0];if(!t)return res.status(404).json({error:'Template not uploaded.'});const localPath=await ensureFileLocal(t.path);res.download(localPath,t.original_name);});
 let inventory=[];
@@ -208,7 +220,7 @@ post('/api/generate',requireAdmin,async(req,res)=>{
   const usable=d.is_common?counts.research===25:d.common_rm_id?counts.subject===25:info.valid;
   const issues=[];
   if(!usable)issues.push({filename:p.original_name,campus:d.campus,department:d.name,set:sourceSet,question:'—',remark:`Need ${expected}. Read ${counts.research} RM / ${counts.subject} subject. Check the source numbering and section headings.`});
-  issues.push(...questions.filter(q=>q.answer_error||!q.answer||placeholder(q)).map(q=>({filename:p.original_name,campus:d.campus,department:d.name,set:sourceSet,section:q.section,question:q.source_number||q.number||q.answer_key_number||questions.indexOf(q)+1,remark:placeholder(q)?'Replace this unused question placeholder.':q.answer_error||'Correct answer missing.'})));
+  issues.push(...questions.filter(q=>q.answer_error||!q.answer||placeholder(q)).map(q=>({filename:p.original_name,campus:d.campus,department:d.name,set:sourceSet,...require('./answers').answerRemark(q,questions.indexOf(q)),...(placeholder(q)?{remark:'Replace this unused question placeholder.'}:{})})));
   if(issues.length){const e=Error('Correct these source questions or answers before generating the final paper.');e.status=422;e.details={generation_issues:issues};throw e;}
   await run('UPDATE papers SET counts=?,valid=? WHERE id=?',[JSON.stringify(info.counts),info.valid?1:0,p.id]);
   const pool={...p,path:localPath,campus:p.campus_id,paper_type:d.common_rm_id?'subject_only':info.paper_type,questions};checked.set(key,pool);return pool;

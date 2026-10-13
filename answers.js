@@ -10,26 +10,44 @@ function layout(xml){
   function visit(n){if(['w:r','m:r'].includes(n.nodeName)){const value=content(n);runs.push({node:n,start:position,end:position+value.length,text:value});parts.push(value);position+=value.length;}else for(let c=n.firstChild;c;c=c.nextSibling)visit(c);}visit(p);
   parts.push('\n');position++;
  }
- const text=parts.join(''),matches=[...text.matchAll(/(?:^|(?<=\s))(?:\(([A-Da-d])\)[.:]?|([A-Da-d])[ \t]*[.):：\-–—])[ \t]*/g)];
+ const text=parts.join('');let matches=[...text.matchAll(/(?:^|(?<=\s))(?:\(([A-Da-d])\)[.:]?|([A-Da-d])[ \t]*[.):：\-–—])[ \t]*/g)];
+ const complete=ms=>['A','B','C','D'].every(label=>ms.some(m=>(m[1]||m[2]).toUpperCase()===label));
+ const atLineStart=m=>!text.slice(text.lastIndexOf('\n',m.index-1)+1,m.index).trim();
+ const lines=matches.filter(atLineStart);
+ // References such as (A) and (B) in a stem/formula are not option labels.
+ // Prefer the explicit option paragraphs, retaining duplicates so genuine ambiguity is reported.
+ if(complete(lines))matches=lines;
+ else {
+  const firstA=lines.find(m=>(m[1]||m[2]).toUpperCase()==='A');
+  if(firstA)matches=matches.filter(m=>m.index>=firstA.index);
+  const plain=matches.filter(m=>m[2]);if(complete(plain))matches=plain;
+ }
+ // Matching-column entries A–D belong to the stem when a separate A–D list
+ // explicitly supplies the four numbered pairings below them.
+ if(/\bmatch\s+(?:the\s+)?following\b/i.test(text)&&matches.length===8&&matches.map(m=>(m[1]||m[2]).toUpperCase()).join('')==='ABCDABCD'){
+  const tail=matches.slice(-4),pairings=tail.every((m,i)=>/^(?:\d+[ \t]*[-–—=:][ \t]*[a-d][; ,\t\n]*){2,}$/i.test(text.slice(m.index+m[0].length,tail[i+1]?.index??text.length).trim()));
+  if(pairings)matches=tail;
+ }
  const options=matches.map((m,i)=>({label:(m[1]||m[2]).toUpperCase(),start:m.index,body:m.index+m[0].length,end:matches[i+1]?matches[i+1].index:text.length}));
  return {doc,text,runs,options};
 }
 function boldValue(r){const b=r.getElementsByTagName('w:rPr')[0]?.getElementsByTagName('w:b')[0];return Boolean(b&&!['0','false','off'].includes(b.getAttribute('w:val')));}
-function boldAnswer(l){
+function boldOptions(l){
  const candidates=l.options.filter(o=>{
   const pieces=l.runs.filter(r=>r.end>o.body&&r.start<o.end).map(r=>({r,value:r.text.slice(Math.max(0,o.body-r.start),Math.min(r.text.length,o.end-r.start))})).filter(p=>p.value.trim());
   return pieces.length&&pieces.every(p=>boldValue(p.r.node));
  });
- return candidates.length===1?candidates[0].label:null;
+ return candidates.map(o=>o.label);
 }
 const scopeFor=s=>/research\s+methodology|section\s*a\b/i.test(s)?'research':/subject|section\s*b\b/i.test(s)?'subject':null;
 function attachAnswers(doc,questions,isHeading){
- const keys=new Map();let inKey=false,scope='global';
+ const keys=new Map(),rawKeys=new Map();let inKey=false,scope='global';
  function record(number,value){
   if(!/^\d{1,3}$/.test(String(number).trim()))return;
   const raw=String(value).trim();if(!raw)return;
   const m=raw.match(/^(?:(?:correct\s*(?:option|answer)|ans(?:wer)?)\s*[:=-]?\s*)?\(?([A-D])\)?[.)]?$/i);
   const key=scope+'|'+Number(number),values=keys.get(key)||new Set();values.add(m?m[1].toUpperCase():'invalid');keys.set(key,values);
+  const rawValues=rawKeys.get(key)||new Set();rawValues.add(raw);rawKeys.set(key,rawValues);
  }
  function visit(n){
   if(n.nodeName==='w:p'){
@@ -50,23 +68,26 @@ function attachAnswers(doc,questions,isHeading){
  }
  visit(doc.documentElement);
  const globalNumbers=[...keys.keys()].filter(k=>k.startsWith('global|')).map(k=>Number(k.split('|')[1]));
- const sections=new Set(questions.map(q=>q.section)),numberUnique=questions.every(q=>q.number!==null)&&new Set(questions.map(q=>q.number)).size===questions.length;
+ const detectedNumber=q=>q.number??q.display_number??null;
+ const sections=new Set(questions.map(q=>q.section)),numberUnique=questions.every(q=>detectedNumber(q)!==null)&&new Set(questions.map(detectedNumber)).size===questions.length;
  const restarted=sections.size>1&&!numberUnique,globalAmbiguous=restarted&&globalNumbers.length&&!globalNumbers.some(n=>n>25);
  const sectionCounts={};
  questions.forEach((q,index)=>{
   const local=(sectionCounts[q.section]||0)+1;sectionCounts[q.section]=local;
-  const l=layout(q.xml),bold=boldAnswer(l),scoped=keys.has(q.section+'|'+(q.number??local))?q.number??local:local;
-  let keyNumber=numberUnique?q.number:index+1;
-  if(sections.size===1&&q.section==='subject'&&!globalNumbers.some(n=>n<=25)&&globalNumbers.some(n=>n>=26))keyNumber=q.number>=26?q.number:local+25;
+  const l=layout(q.xml),boldLabels=boldOptions(l),bold=boldLabels.length===1?boldLabels[0]:null,detected=detectedNumber(q),scoped=keys.has(q.section+'|'+(detected??local))?detected??local:local;
+  let keyNumber=numberUnique?detected:index+1;
+  if(sections.size===1&&q.section==='subject'&&!globalNumbers.some(n=>n<=25)&&globalNumbers.some(n=>n>=26))keyNumber=detected>=26?detected:local+25;
   const specific=keys.get(q.section+'|'+scoped),entry=specific||keys.get('global|'+keyNumber);
   let error=null,answer=null,source=null;
   if(!specific&&globalAmbiguous)error='Answer key repeats question numbers without identifying RM and subject sections.';
-  else if(entry?.has('invalid')||entry?.size>1)error='The source answer key is invalid or contains conflicting answers for this question.';
-  else if(entry?.size){answer=[...entry][0];source='answer_key';if(bold&&bold!==answer)error='The source answer key and the bold option disagree.';}
+  else if(entry?.has('invalid')||entry?.size>1)error=`The source answer key is invalid or contains conflicting answers for key question ${specific?scoped:keyNumber}: ${[...(rawKeys.get((specific?q.section:'global')+'|'+(specific?scoped:keyNumber))||[])].join(' / ')}. Provide one option letter A, B, C or D.`;
+  else if(entry?.size){answer=[...entry][0];source='answer_key';if(bold&&bold!==answer)error=`The source answer key and the bold option disagree: key question ${specific?scoped:keyNumber} says ${answer}; option ${bold} has bold answer text. Confirm the intended answer in the Word document.`;}
   else if(bold){answer=bold;source='bold_option';}
-  else error='No unambiguous correct answer was found in the source key or bold options.';
-  if(answer&&(['A','B','C','D'].some(label=>l.options.filter(o=>o.label===label).length!==1)))error='The answer cannot be marked reliably: identify each option once using A, B, C and D.';
-  Object.assign(q,{source_number:q.number??local,answer:error?null:answer,answer_source:source,answer_key_number:entry?(specific?scoped:keyNumber):null,answer_error:error});
+  else error=`No unambiguous correct answer was found: no readable answer-key entry for question ${keyNumber}; ${boldLabels.length?'options '+boldLabels.join(', ')+' all have bold answer text':'no single option has fully bold answer text'}. Check the original Word document.`;
+  const labelCounts=Object.fromEntries(['A','B','C','D'].map(label=>[label,l.options.filter(o=>o.label===label).length]));
+  const missing=Object.keys(labelCounts).filter(label=>labelCounts[label]===0),duplicated=Object.keys(labelCounts).filter(label=>labelCounts[label]>1);
+  if(answer&&(missing.length||duplicated.length)&&!error)error=`The system could not locate four separate options: ${[missing.length?'label(s) '+missing.join(', ')+' not recognized':null,duplicated.length?'label(s) '+duplicated.map(label=>label+' ('+labelCounts[label]+' occurrences)').join(', ')+' detected more than once':null].filter(Boolean).join('; ')}. Check the option text in the Word document.`;
+  Object.assign(q,{source_number:detected??local,answer:error?null:answer,answer_source:source,answer_key_number:entry?(specific?scoped:keyNumber):null,answer_error:error,answer_diagnostics:{question_text:l.text.slice(0,l.options[0]?.start??l.text.length).trim(),key_question:specific?scoped:keyNumber,key_answers:entry?[...entry]:[],key_raw_values:[...(rawKeys.get((specific?q.section:'global')+'|'+(specific?scoped:keyNumber))||[])],bold_options:boldLabels,option_counts:labelCounts,options:l.options.map(o=>({label:o.label,text:l.text.slice(o.body,o.end).trim()}))}});
  });
  return questions;
 }
@@ -120,4 +141,5 @@ function markedQuestion(xml,answer,number=null){
  });
  return Array.from(l.doc.documentElement.childNodes).map(serialize).join('');
 }
-module.exports={attachAnswers,markedQuestion,layout};
+function answerRemark(q,index=0){return {question:q.source_number??q.number??q.display_number??index+1,section:q.section,remark:q.answer_error||'Correct answer missing.',...q.answer_diagnostics};}
+module.exports={attachAnswers,markedQuestion,layout,answerRemark};

@@ -4,6 +4,38 @@ const p=t=>`<w:p><w:r><w:t>${t}</w:t></w:r></w:p>`;
 const cell=t=>'<w:tc>'+p(t)+'</w:tc>',row=a=>'<w:tr>'+a.map(cell).join('')+'</w:tr>';
 function doc(body){const z=new Zip();z.file('word/document.xml',`<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>${body}</w:body></w:document>`);return z.generate({type:'nodebuffer'});}
 const question=(number,stem='Which result applies?')=>p(`${number}. ${stem} A) alpha B) beta C) gamma D) delta`);
+function numberedDoc(body,definitions){const z=new Zip(doc(body));z.file('word/numbering.xml',`<w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">${definitions}</w:numbering>`);return z.generate({type:'nodebuffer'});}
+const level=(n,fmt,start=1)=>`<w:lvl w:ilvl="${n}"><w:start w:val="${start}"/><w:numFmt w:val="${fmt}"/></w:lvl>`;
+const list=(id,levels,override='')=>`<w:abstractNum w:abstractNumId="${id}">${levels}</w:abstractNum><w:num w:numId="${id}"><w:abstractNumId w:val="${id}"/>${override}</w:num>`;
+const numbered=(t,id,n,bold=false)=>`<w:p><w:pPr><w:numPr><w:ilvl w:val="${n}"/><w:numId w:val="${id}"/></w:numPr></w:pPr><w:r>${bold?'<w:rPr><w:b/></w:rPr>':''}<w:t>${t}</w:t></w:r></w:p>`;
+
+test('nested Word decimal questions and numeric letter options retain 50 questions and their correct key positions',()=>{
+ let body=p('Research Methodology');for(let n=1;n<=25;n++)body+=question(n);
+ body+=p('Subject-Specific Questions');let defs='';
+ const groups=[{id:1,n:1,start:26,count:12},{id:2,n:0,start:38,count:5},{id:3,n:2,start:43,count:3},{id:4,n:0,start:46,count:5}];
+ for(const g of groups){defs+=list(g.id,level(g.n,'decimal',g.start));for(let n=g.start;n<g.start+g.count;n++){body+=numbered('Which value applies to sample '+n+'?',g.id,g.n);const optId=100+n;defs+=list(optId,level(1,'upperLetter'));for(const [i,value] of ['0.98','20','49','98'].entries())body+=numbered(value,optId,1,i===2);}}
+ body+=p('Answer Key');for(let n=1;n<=50;n++)body+=p(n+' C');
+ const qs=inspect(numberedDoc(body,defs)).questions;assert.equal(qs.length,50);assert.deepEqual(qs.slice(25).map(q=>q.source_number),Array.from({length:25},(_,i)=>i+26));assert.ok(qs.every(q=>q.answer==='C'&&!q.answer_error));assert.ok(qs.slice(25).every(q=>layout(q.xml).options.length===4));
+});
+test('numbering overrides are respected and nested option numbering restarts at each decimal question',()=>{
+ const defs=list(1,level(0,'decimal')+level(1,'upperLetter'),'<w:lvlOverride w:ilvl="0"><w:startOverride w:val="26"/></w:lvlOverride>');
+ let body=p('Subject-Specific Questions');for(let i=0;i<2;i++)body+=numbered('Which value is correct?',1,0)+['20','49','98','2'].map((t,n)=>numbered(t,1,1,n===1)).join('');body+=p('Answer Key')+p('26 B')+p('27 B');
+ const qs=inspect(numberedDoc(body,defs)).questions;assert.deepEqual(qs.map(q=>q.source_number),[26,27]);assert.ok(qs.every(q=>q.answer==='B'&&!q.answer_error));assert.equal(qs[0].number,null);
+});
+test('numeric table question cells do not require correctly labelled options to count the next question',()=>{
+ const body=p('Subject-Specific Questions')+'<w:tbl>'+row([1,'Which result? A) alpha B) beta C) gamma D delta'])+row([2,'Which second result? A) alpha B) beta C) gamma D) delta'])+'</w:tbl>';
+ assert.deepEqual(inspect(doc(body)).questions.map(q=>q.number),[1,2]);
+});
+test('scientific references in a stem or option do not create duplicate option labels',()=>{
+ const body=p('Subject-Specific Questions')+p('26. Compare compounds (A) and (B). Which conversion is correct?')+p('A) Compound (A) converts to (B)')+p('B) beta')+p('C) gamma')+p('D) delta')+p('Answer Key')+p('26 A');const q=inspect(doc(body)).questions[0];assert.equal(q.answer,'A');assert.deepEqual(q.answer_diagnostics.option_counts,{A:1,B:1,C:1,D:1});
+});
+test('matching-column labels belong to the stem, separate numbered pairings are the options',()=>{
+ let body=p('Subject-Specific Questions')+p('26. Match the following');for(let n=1;n<=4;n++)body+=p(String(n))+p(['A','B','C','D'][n-1]+') column description '+n);for(const a of ['A','B','C','D'])body+=p(a+') 1 - c; 2 - d; 3 - b; 4 - a');body+=p('Answer Key')+p('26 B');const q=inspect(doc(body)).questions[0];assert.equal(q.answer,'B');assert.ok(q.answer_diagnostics.question_text.includes('column description'));assert.equal(q.answer_diagnostics.options.length,4);
+});
+test('answer remarks report real key and bold evidence without hiding genuine duplicate labels',()=>{
+ const {validateTemplate}=require('./submission-policy');const b=doc(p('Subject-Specific Questions')+p('26. Which result?')+p('A) alpha')+'<w:p><w:r><w:rPr><w:b/></w:rPr><w:t>B) beta</w:t></w:r></w:p>'+p('C) gamma')+p('D) delta')+p('Answer Key')+p('26 A'));const info=inspectForDepartment(b,{common_rm_id:201}),e=validateTemplate(b,{common_rm_id:201},info).answer_errors[0];assert.equal(e.question,26);assert.equal(e.question_text,'26. Which result?');assert.deepEqual(e.key_answers,['A']);assert.deepEqual(e.bold_options,['B']);assert.match(e.remark,/key question 26 says A; option B/);
+ const duplicate=inspect(doc(p('Subject-Specific Questions')+p('26. Which result?')+p('A) alpha')+p('A) another alpha')+p('B) beta')+p('C) gamma')+p('D) delta')+p('Answer Key')+p('26 A'))).questions[0];assert.equal(duplicate.answer,null);assert.match(duplicate.answer_error,/A \(2 occurrences\)/);
+});
 test('full template key numbering follows RM and subject order even when source numbers restart',()=>{
  let body='';for(const heading of ['Research Methodology','Subject-Specific Questions']){body+=p(heading);for(let i=1;i<=25;i++)body+=question(i);}
  body+=p('Answer Key AA')+'<w:tbl>'+row(['Question No.','Correct Option','Question No.','Correct Option']);for(let i=1;i<=25;i++)body+=row([i,'A',i+25,'D']);body+='</w:tbl>';

@@ -33,21 +33,17 @@ function validateTemplate(buffer,d,info){
  if(!info.valid)errors.push(d.is_common?'Provide 25 numbered Research Methodology questions.':d.common_rm_id?'Provide 25 numbered subject questions. Your assigned coordinator supplies Common RM. A complete 25 RM + 25 subject paper is also accepted.':'Provide 25 numbered Research Methodology questions and 25 numbered subject questions under their section headings.');
  const option_errors=[];
  function optionLabels(question){
-  const value=String(question.text||'').replace(/\u00a0/g,' '),labels=new Set();
-  // Accept A), A., (A), A:, A- and labels separated from their option by a tab/line break.
-  for(const match of value.matchAll(/(?:^|(?<=\s))(?:\(([A-Da-d])\)[.:]?|([A-Da-d])[ \t]*[.):：\-–—])[ \t]*/g))labels.add((match[1]||match[2]).toUpperCase());
-  for(const match of value.matchAll(/(?:^|[\r\n])\s*\(([A-Da-d])\)\s+/g))labels.add(match[1].toUpperCase());
-  return labels;
+  return new Set(require('./answers').layout(question.xml).options.map(o=>o.label));
  }
  info.questions.forEach((q,i)=>{
   const labels=optionLabels(q);
   const required=['A','B','C','D'],missing=required.filter(l=>!labels.has(l));
-  if(missing.length){const question=q.number||i+1;option_errors.push({question,section:q.section,detected:[...labels].join(', ')||'None',missing:missing.join(', '),problem:'Option label is missing or not recognized',expected:'A) …  B) …  C) …  D) …'});}
+  if(missing.length){const question=q.source_number??q.number??q.display_number??i+1;option_errors.push({question,section:q.section,question_text:q.answer_diagnostics?.question_text||q.text,detected:[...labels].join(', ')||'None',missing:missing.join(', '),problem:'Option label is missing or not recognized',expected:'A) …  B) …  C) …  D) …'});}
  });
  const doc=new DOMParser().parseFromString(new Zip(buffer).file('word/document.xml').asText(),'application/xml');
  const key=Array.from(doc.getElementsByTagName('w:p')).some(p=>isAnswerKeyHeading(text(p).trim()));
  if(!key)warnings.push('No separate Answer Key heading detected. The administrator must check the supplied answers before approval.');
- const answer_errors=info.questions.filter(q=>q.answer_error).map(q=>({question:q.number||info.questions.indexOf(q)+1,section:q.section,remark:q.answer_error}));
+ const answer_errors=info.questions.filter(q=>q.answer_error).map(q=>require('./answers').answerRemark(q,info.questions.indexOf(q)));
  return {advisory:true,passed:errors.length===0,paper_type:info.paper_type,counts:info.counts,expected:d.is_common?'25 RM':d.common_rm_id?'25 subject (Common RM supplied separately)':'25 RM + 25 subject',checks:['Word .docx format','Numbered question count and sections','No unfilled question placeholders'],errors,warnings,option_errors,answer_errors};
 }
 module.exports={commonFor,inspectForDepartment,validateTemplate,placeholder};

@@ -1,12 +1,12 @@
 const Zip = require('pizzip');
 const {DOMParser, XMLSerializer} = require('@xmldom/xmldom');
 const crypto = require('crypto');
-const {attachAnswers}=require('./answers');
+const {attachAnswers,layout}=require('./answers');
 const ns = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
 const esc = s => String(s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&apos;'}[c]));
 const parse = x => new DOMParser().parseFromString(x,'application/xml');
 const serialize = n => new XMLSerializer().serializeToString(n);
-function text(n) {let result='';function visit(node){if(node.nodeName==='w:t')result+=node.textContent;else if(['w:br','w:cr'].includes(node.nodeName))result+='\n';else if(node.nodeName==='w:tab')result+='\t';else for(let child=node.firstChild;child;child=child.nextSibling)visit(child);}visit(n);return result;}
+function text(n) {let result='';function visit(node){if(['w:t','m:t'].includes(node.nodeName))result+=node.textContent;else if(['w:br','w:cr'].includes(node.nodeName))result+='\n';else if(node.nodeName==='w:tab')result+='\t';else for(let child=node.firstChild;child;child=child.nextSibling)visit(child);}visit(n);return result;}
 const isAnswerKeyHeading=t=>t.length<100&&(/answer\s*key\s*$/i.test(t)||/^answer\s*key\b/i.test(t));
 function inspect(buffer,{subjectName,includeAnswers=true}={}) {
  const zip=new Zip(buffer); const entry=zip.file('word/document.xml');
@@ -22,16 +22,21 @@ function inspect(buffer,{subjectName,includeAnswers=true}={}) {
  function inSummary(p){for(let node=p.parentNode;node;node=node.parentNode)if(summaryTables.has(node))return true;return false;}
  const numbering=zip.file('word/numbering.xml');
  const numberDoc=numbering?parse(numbering.asText()):null;
- function format(p){
+ const listCounters=new Map();
+ function listInfo(p,requestedLevel){
   const id=p.getElementsByTagName('w:numId')[0]?.getAttribute('w:val');
-  const level=p.getElementsByTagName('w:ilvl')[0]?.getAttribute('w:val')||'0';
+  const level=requestedLevel??p.getElementsByTagName('w:ilvl')[0]?.getAttribute('w:val')??'0';
   if(!numberDoc||!id)return null;
   const num=Array.from(numberDoc.getElementsByTagName('w:num')).find(n=>n.getAttribute('w:numId')===id);
   const aid=num?.getElementsByTagName('w:abstractNumId')[0]?.getAttribute('w:val');
   const abstract=Array.from(numberDoc.getElementsByTagName('w:abstractNum')).find(n=>n.getAttribute('w:abstractNumId')===aid);
-  const lvl=abstract&&Array.from(abstract.getElementsByTagName('w:lvl')).find(n=>n.getAttribute('w:ilvl')===level);
-  return lvl?.getElementsByTagName('w:numFmt')[0]?.getAttribute('w:val');
+  const override=num&&Array.from(num.getElementsByTagName('w:lvlOverride')).find(n=>n.getAttribute('w:ilvl')===level);
+  const lvl=override?.getElementsByTagName('w:lvl')[0]||(abstract&&Array.from(abstract.getElementsByTagName('w:lvl')).find(n=>n.getAttribute('w:ilvl')===level));
+  if(!lvl)return null;
+  const start=Number(override?.getElementsByTagName('w:startOverride')[0]?.getAttribute('w:val')||lvl.getElementsByTagName('w:start')[0]?.getAttribute('w:val')||1);
+  return {id,level:Number(level),format:lvl.getElementsByTagName('w:numFmt')[0]?.getAttribute('w:val'),start,restart:lvl.getElementsByTagName('w:lvlRestart')[0]?.getAttribute('w:val')};
  }
+ const format=p=>listInfo(p)?.format;
  const heading=t=>{
   if(/^(?:(?:part|section)\s*[a1][.:) –—-]*\s*)?research\s+methodology\b/i.test(t))return 'research';
   if(/^(?:(?:part|section)\s*[b2][.:) –—-]*\s*)?subject[ -]specific(?:\s+(?:questions|core\s+topics))?(?=\s*(?:$|\(|[0-9]))/i.test(t))return 'subject';
@@ -53,8 +58,8 @@ function inspect(buffer,{subjectName,includeAnswers=true}={}) {
   const cells=Array.from(cell.parentNode.childNodes).filter(n=>n.nodeName==='w:tc');
   return cells[0]===cell&&cells.length>1&&cells.slice(1).some(c=>text(c).trim()||c.getElementsByTagName('w:drawing').length||c.getElementsByTagName('w:pict').length);
  }
- let section=null,pending=[],questions=[],letter=0,started=false,number=null;
- function flush(){if(!pending.length)return;const combined=pending.map(x=>text(parse(x))).join('\n');questions.push({section:section||'unclassified',number,xml:pending.join(''),text:combined,hash:crypto.createHash('sha256').update(combined.toLowerCase().replace(/[^\p{L}\p{N}]/gu,'')).digest('hex')});pending=[];letter=0;}
+ let section=null,pending=[],questions=[],started=false,number=null,displayNumber=null;
+ function flush(){if(!pending.length)return;const combined=pending.map(x=>text(parse(x))).join('\n');questions.push({section:section||'unclassified',number,display_number:displayNumber,xml:pending.join(''),text:combined,hash:crypto.createHash('sha256').update(combined.toLowerCase().replace(/[^\p{L}\p{N}]/gu,'')).digest('hex')});pending=[];}
  for(const [paragraphIndex,p] of paragraphs.entries()){
   if(inSummary(p))continue;
   // Nested textbox paragraphs are visited separately, never counted twice.
@@ -65,7 +70,22 @@ function inspect(buffer,{subjectName,includeAnswers=true}={}) {
   if(hasSections&&!section)continue;
   if(/^\(?25\s*(?:[×x]|1\s*=)/i.test(t))continue;
   if(!t&&!p.getElementsByTagName('w:drawing').length&&!p.getElementsByTagName('m:oMath').length&&!p.getElementsByTagName('w:pict').length)continue;
-  let manual=t.match(/^(?:Q(?:uestion)?\s*\.?\s*)?(\d{1,3})\s*[.)]\s*(?!\d)/i)||t.match(/^(\d{1,3})$/);
+  const list=listInfo(p),lettered=['lowerLetter','upperLetter'].includes(list?.format);
+  let listNumber=null;
+  if(list){
+   for(const key of listCounters.keys())if(key.startsWith(list.id+'|')&&Number(key.split('|')[1])>list.level){const child=listInfo(p,key.split('|')[1]);if(child?.restart!=='0')listCounters.delete(key);}
+   const key=list.id+'|'+list.level;listNumber=listCounters.has(key)?listCounters.get(key)+1:list.start;listCounters.set(key,listNumber);
+  }
+  // The visible Word list label determines the role; a numeric option body is not a question.
+  let manual=lettered?null:t.match(/^(?:Q(?:uestion)?\s*\.?\s*)?(\d{1,3})\s*[.)]\s*(?!\d)/i)||t.match(/^(\d{1,3})$/);
+  if(manual&&/^\d{1,3}$/.test(t)&&pending.length){
+   let cell=p.parentNode;while(cell&&cell.nodeName!=='w:tc')cell=cell.parentNode;
+   const cells=cell?Array.from(cell.parentNode.childNodes).filter(n=>n.nodeName==='w:tc'):[];
+   const previous=layout(pending.join('')).options;
+   const questionCell=cells.length>1&&cells[0]===cell&&cells.slice(1).some(c=>text(c).trim().length>15);
+   const numberedNext=number!==null&&Number(t)===number+1&&(questionCell||['A','B','C','D'].every(label=>previous.some(o=>o.label===label)));
+   if(!numberedNext)manual=null;
+  }
   // A bare question number is accepted only with a complete labelled option block ahead.
   // This avoids treating a numerical value in an option or continuation as a question.
   const bare=t.match(/^(?:Q(?:uestion)?[ \t]+)?(\d{1,3})[ \t]+(?=[\p{L}(])/iu);
@@ -81,15 +101,15 @@ function inspect(buffer,{subjectName,includeAnswers=true}={}) {
    }
    if(found)manual=bare;
   }
-  const automatic=['decimal','decimalZero'].includes(format(p))&&(p.getElementsByTagName('w:ilvl')[0]?.getAttribute('w:val')||'0')==='0';
+  const automatic=['decimal','decimalZero'].includes(list?.format);
   const questionLike=/[?？]|\b[A-D][.)]\s|^(which|what|how|why|define|explain|identify|describe)\b/i.test(t);
   const boundary=(manual||automatic)&&(section||started||questionLike||firstQuestionCell(p,t));
-  if(boundary){flush();number=manual?Number(manual[1]):null;started=true;}
+  if(boundary){flush();number=manual?Number(manual[1]):null;displayNumber=number??listNumber;started=true;}
   if(!started)continue;
   if(!t&&!p.getElementsByTagName('w:drawing').length&&!p.getElementsByTagName('m:oMath').length&&!p.getElementsByTagName('w:pict').length)continue;
   let xml=serialize(p);
   if(['lowerLetter','upperLetter'].includes(format(p))&&pending.length&&!/^\(?[A-Da-d][.)]/.test(t)){
-   const label=String.fromCharCode(65+letter++)+') ';
+   const label=String.fromCharCode(65+(listNumber-1))+') ';
    const cloned=p.cloneNode(true),r=doc.createElementNS(ns,'w:r'),tNode=doc.createElementNS(ns,'w:t');
    tNode.setAttribute('xml:space','preserve');tNode.appendChild(doc.createTextNode(label));r.appendChild(tNode);
    const pPr=cloned.getElementsByTagName('w:pPr')[0];cloned.insertBefore(r,pPr?pPr.nextSibling:cloned.firstChild);xml=serialize(cloned);

@@ -110,7 +110,11 @@ async function startServer(port){
   const relocated=new sqlite.Database(path.join(dir,'app','papers.db'));
   const rows=await new Promise((resolve,reject)=>relocated.all('SELECT id,path FROM papers',(e,r)=>e?reject(e):resolve(r)));
   for(const row of rows)await run(relocated,'UPDATE papers SET path=? WHERE id=?',['Z:\\retired-machine\\files\\'+path.basename(row.path),row.id]);
+  // Counts saved by an earlier parser must not remain visible after a deployment.
+  await run(relocated,"UPDATE papers SET counts=? WHERE kind='submission' AND department_id IN (1,30)",[JSON.stringify({research:0,subject:17})]);
   await close(relocated);
+  const refreshed=(await request(ac,'/state')).data.papers.filter(p=>p.kind==='submission'&&[1,30].includes(p.department_id));
+  assert.ok(refreshed.length>=4);assert.ok(refreshed.every(p=>JSON.parse(p.counts).subject===25&&!p.count_warning));
   assert.equal((await request(ac,`/papers/${archive.data.id}/download`)).status,200);
   assert.equal((await request(hc,'/storage-status')).status,403);
   assert.equal((await request(ac,'/storage-status')).data.mode,'local');

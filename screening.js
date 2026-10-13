@@ -12,7 +12,7 @@ function screen(questions,archives,set){
   const hits=[];
   for(const archive of archives)archive.questions.forEach((old,j)=>{
    const result=similarity(q.text,old.text);
-   if(result.score>=0.8)hits.push({upcoming_set:set,upcoming_question:q.number??i+1,upcoming_section:q.section,upcoming_text:q.text,past_session:archive.session,past_set:archive.set_name,past_campus:archive.campus,past_question:old.number??j+1,past_section:old.section,past_text:old.text,past_file:archive.original_name,type:result.type,similarity:Math.round(result.score*100)});
+   if(result.score>=0.8)hits.push({upcoming_set:set,upcoming_question:q.number??q.display_number??i+1,upcoming_section:q.section,upcoming_text:q.text,past_session:archive.session,past_set:archive.set_name,past_campus:archive.campus,past_question:old.number??old.display_number??j+1,past_section:old.section,past_text:old.text,past_file:archive.original_name,type:result.type,similarity:Math.round(result.score*100)});
   });
   // Count each uploaded block once, even when RM and subject restart at question 1.
   if(hits.length){matchedCount++;matches.push(...hits.sort((a,b)=>b.similarity-a.similarity));}
