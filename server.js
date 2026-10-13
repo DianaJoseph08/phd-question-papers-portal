@@ -225,21 +225,24 @@ post('/api/generate',requireAdmin,async(req,res)=>{
   await run('UPDATE papers SET counts=?,valid=? WHERE id=?',[JSON.stringify(info.counts),info.valid?1:0,p.id]);
   const pool={...p,path:localPath,campus:p.campus_id,paper_type:d.common_rm_id?'subject_only':info.paper_type,questions};checked.set(key,pool);return pool;
  }
- const pools=[];
+ const pools=[],sharedCommon=require('./public/common-rm').commonRmSources(departments,matches);
+ if(sharedCommon.missing.length)throw Error('Common RM assignment is missing for '+sharedCommon.missing.join(', ')+'.');
  for(const d of matches)for(const sourceSet of ['A','B']){
-  const subject=await approvedPool(d,sourceSet);let questions=subject.questions;
-  if(d.common_rm_id){
-   const coordinator=departments.find(c=>c.id===d.common_rm_id);
-   if(!coordinator)throw Error('Common RM assignment is missing for '+d.name+'.');
-   const common=await approvedPool(coordinator,sourceSet);
-   questions=[...common.questions.map(q=>({...q,source:common,contributing_department_id:d.id})),...questions];
-  }
-  pools.push({...subject,questions});
+  const source=await approvedPool(d,sourceSet);
+  if(!d.is_common)pools.push({...source,section:'subject',questions:source.questions.filter(q=>q.section==='subject')});
+  if(d.is_common||!d.common_rm_id)pools.push({...source,section:'research',questions:source.questions.filter(q=>q.section==='research')});
  }
+ // Common RM is shared by its faculty across campuses, independently of where
+ // this subject department is offered. Each coordinator set is included once.
+ for(const coordinator of sharedCommon.sources)for(const sourceSet of ['A','B']){
+  const source=await approvedPool(coordinator,sourceSet);
+  pools.push({...source,section:'research',questions:source.questions.map(q=>({...q,contributing_department_id:department.id}))});
+ }
+ const sectionCampuses=Object.fromEntries(['research','subject'].map(section=>[section,[...new Set(pools.filter(p=>p.section===section).map(p=>p.campus))]]));
  const opposite=await all(persistence.db,'SELECT manifest FROM generations WHERE department_key=? AND set_name<>?',[departmentKey(department),set]);
  const excluded=new Set(opposite.flatMap(g=>JSON.parse(g.manifest).map(q=>q.hash)));
  pools.forEach(p=>p.questions=p.questions.filter(q=>!excluded.has(q.hash)));
- const chosen=choose(pools,campusCount<2,set,department.is_common);const id=crypto.randomUUID(),file=path.join(data,'files',id+'.docx');
+ const chosen=choose(pools,campusCount<2,set,department.is_common,sectionCampuses);const id=crypto.randomUUID(),file=path.join(data,'files',id+'.docx');
  const buffer=generate(chosen,department.name,set,templateBuffer,{facultyName:department.institution});fs.writeFileSync(file,buffer);
  await cloudStorage.putDocument(file,'files/'+id+'.docx');
  const distribution=JSON.stringify({Ramapuram:chosen.filter(q=>q.source.campus===1).length,Trichy:chosen.filter(q=>q.source.campus===2).length});
@@ -247,7 +250,7 @@ post('/api/generate',requireAdmin,async(req,res)=>{
  await run('INSERT INTO generations (id,department_key,department_name,set_name,path,distribution,manifest) VALUES (?,?,?,?,?,?,?)',[id,departmentKey(department),department.name,set,file,distribution,manifest]);
  await audit.log(req.user,'paper.generated','generation',id,{department:department.name,set,distribution:JSON.parse(distribution),template:template.original_name});
  await persistence.commit();
- res.json({id,template_name:template.original_name,distribution:JSON.parse(distribution),question_count:chosen.length,common_rm:matches.filter(d=>d.common_rm_id).map(d=>{const c=departments.find(c=>c.id===d.common_rm_id);return {campus:d.campus,category:c.name,coordinator:c.coordinator_name};})});
+ res.json({id,template_name:template.original_name,distribution:JSON.parse(distribution),question_count:chosen.length,section_distribution:require('./source-record').sectionDistribution(chosen),common_rm:sharedCommon.sources.map(c=>({campus:c.campus,category:c.name,coordinator:c.coordinator_name}))});
 });
 get('/api/generations/:id/:action',requireAdmin,async(req,res)=>{const g=(await all(persistence.db,'SELECT * FROM generations WHERE id=?',[req.params.id]))[0];if(!g)return res.status(404).end();if(['manifest','source-csv'].includes(req.params.action)){const papers=await all(persistence.db,'SELECT id,original_name,deleted_at FROM papers'),record=require('./source-record').sourceRecord(g,departments,papers);if(req.params.action==='manifest')return res.json(record);res.attachment('January-2027-'+g.department_name.replace(/[^a-z0-9]/gi,'-')+'-Set-'+g.set_name+'-Source-Record.csv');res.type('text/csv');return res.send(require('./source-record').sourceCsv(record));}if(req.params.action!=='download')return res.status(404).end();const localPath=await ensureFileLocal(g.path);res.download(localPath,`January-2027-${g.department_name.replace(/[^a-z0-9]/gi,'-')}-Set-${g.set_name}.docx`);});
 app.use(express.static(path.join(root,'public')));

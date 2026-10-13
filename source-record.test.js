@@ -1,5 +1,5 @@
 const test=require('node:test'),assert=require('node:assert/strict'),vm=require('node:vm'),fs=require('fs');
-const {sourceDetails,sourceRecord,sourceCsv}=require('./source-record');
+const {sourceDetails,sourceRecord,sourceCsv,sectionDistribution}=require('./source-record');
 const departments=[{id:201,name:'Common Research Methodology (FET)',campus:'Ramapuram',institution:'Faculty of Engineering and Technology',coordinator_name:'Dr. Vani'},{id:30,name:'Mechanical Engineering',campus:'Trichy',institution:'College of Engineering and Technology'}];
 const papers=[{id:'rm-source',original_name:'RM Set A.docx'},{id:'subject-source',original_name:'Subject Set B.docx'}];
 const questions=[{number:26,section:'subject',campus:2,department_id:30,paper_id:'subject-source',source_set:'B',source_question_number:49,answer:'C',answer_source:'answer_key',text:'49. Which result?\nA) alpha B) beta C) gamma D) delta'},{number:1,section:'research',campus:1,department_id:201,paper_id:'rm-source',source_set:'A',source_question_number:12,answer:'B',answer_source:'bold_option',text:'12. Which research method?\nA) alpha B) beta C) gamma D) delta'}];
@@ -7,6 +7,11 @@ const generation={id:'generation-fixture',department_name:'Mechanical Engineerin
 test('older source records resolve exact source versions and coordinator metadata without changing answers or numbering',()=>{
  const record=sourceRecord(generation,departments,[...papers,{id:'new-rm',original_name:'New RM.docx'}]);
  assert.deepEqual(record.questions.map(q=>q.number),[1,26]);assert.equal(record.department_name,'Mechanical Engineering');assert.equal(record.questions[0].source_file,'RM Set A.docx');assert.equal(record.questions[0].source_coordinator,'Dr. Vani');assert.equal(record.questions[1].source_campus,'Trichy');assert.equal(record.questions[1].source_question_number,49);assert.equal(record.questions[1].answer,'C');assert.equal(record.questions[1].source_department,'Mechanical Engineering');
+});
+test('section breakdown distinguishes shared Common RM from a single-campus subject section',()=>{
+ const questions=[...Array.from({length:13},()=>({section:'research',source:{campus:1}})),...Array.from({length:12},()=>({section:'research',source:{campus:2}})),...Array.from({length:25},()=>({section:'subject',source:{campus:1}}))];
+ const distribution=sectionDistribution(questions);assert.deepEqual(distribution,{research:{Ramapuram:13,Trichy:12},subject:{Ramapuram:25,Trichy:0}});
+ const c=viewContext();c.distribution=distribution;const html=vm.runInContext('sectionDistributionTable(distribution)',c);assert.ok(html.includes('Research Methodology</td><td>13</td><td>12</td><td>25'));assert.ok(html.includes('Subject</td><td>25</td><td>0</td><td>25'));
 });
 test('saved source names survive later department changes and removed source files are not offered for download',()=>{
  const q=sourceDetails({...questions[0],source_department:'Original department',source_file:'Original.docx',source_coordinator:'Original coordinator'},departments,[{...papers[1],deleted_at:'2026-10-14'}]);assert.equal(q.source_department,'Original department');assert.equal(q.source_file,'Original.docx');assert.equal(q.source_coordinator,'Original coordinator');assert.equal(q.source_download_available,false);

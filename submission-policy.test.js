@@ -58,6 +58,13 @@ test('Common RM source provenance is kept when combined with subject pools',()=>
  const pools=['A','B'].map(set_name=>({campus:1,department_id:1,set_name,questions:['research','subject'].flatMap(section=>Array.from({length:25},(_,i)=>({section,hash:set_name+section+i,...(section==='research'?{source:{...common,set_name}}:{})})))}));
  const result=choose(pools,true);assert.ok(result.filter(q=>q.section==='research').every(q=>q.source.path==='common.docx'&&q.source.department_id===201));assert.ok(result.filter(q=>q.section==='subject').every(q=>q.source.department_id===1));
 });
+test('Mathematics retains all three subject departments with shared RM providers counted once',()=>{
+ const source=(department_id,campus,section,set_name)=>({department_id,campus,section,set_name,questions:Array.from({length:25},(_,i)=>({section,hash:department_id+section+set_name+i}))});
+ const pools=['A','B'].flatMap(set=>[source(8,1,'subject',set),source(13,1,'subject',set),source(35,2,'subject',set),source(201,1,'research',set),source(13,1,'research',set),source(202,2,'research',set)]),plan={research:[1,2],subject:[1,2]};
+ const a=choose(pools,false,'A',false,plan),used=new Set(a.map(q=>q.hash)),b=choose(pools.map(p=>({...p,questions:p.questions.filter(q=>!used.has(q.hash))})),false,'B',false,plan);
+ for(const qs of [a,b]){assert.equal(qs.length,50);assert.equal(qs.filter(q=>q.source.campus===1).length,25);assert.equal(qs.filter(q=>q.source.campus===2).length,25);for(const id of [8,13,35])for(const set of ['A','B'])assert.ok(qs.some(q=>q.section==='subject'&&q.source.department_id===id&&q.source.set_name===set));for(const id of [201,202])for(const set of ['A','B'])assert.ok(qs.some(q=>q.section==='research'&&q.source.department_id===id&&q.source.set_name===set));}
+ assert.equal(new Set([...a,...b].map(q=>q.hash)).size,100);
+});
 
 test('answer keys with set suffixes are excluded and Word line breaks retain option labels',()=>{
  const z=new Zip(fixture([['Subject-Specific Questions',25]]));

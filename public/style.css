@@ -10,3 +10,5 @@ fieldset{border:1px solid #ccd6e2;border-radius:8px;padding:16px;margin:18px 0}l
 .question-excerpt{display:block;color:#162b44;font-size:13px;line-height:1.5;letter-spacing:0;white-space:pre-wrap;min-width:220px;max-width:320px;margin-top:8px}details summary{cursor:pointer;color:#126d78}details p{white-space:pre-wrap}
 
 .source-record td{vertical-align:top;line-height:1.5}.source-record td:first-child{min-width:80px}.source-record td:nth-child(2){min-width:240px}.source-record td:nth-child(3),.source-record td:nth-child(4){min-width:180px}.source-record td:last-child{min-width:110px}.source-record details{margin-top:8px}.source-question{white-space:pre-wrap;padding:12px;background:#f3f6fa;border-radius:6px;margin-top:10px}.source-filename{display:inline-block;overflow-wrap:anywhere}.source-record #sourceCount{font-size:13px;color:#162b44}.source-stem{display:block}
+
+.section-distribution{margin:14px 0}.section-distribution caption{text-align:left;font-weight:600;padding:6px 10px;color:#162b44}.source-record .section-distribution td{min-width:0!important}

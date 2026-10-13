@@ -124,13 +124,15 @@ function inspect(buffer,{subjectName,includeAnswers=true}={}) {
  return {questions,counts,valid:counts.research===25&&counts.subject===25&&!unclassified&&!placeholders,method:'question-numbering'};
 }
 
-function choose(pools, single=false, finalSet='A',common=false) {
+function choose(pools, single=false, finalSet='A',common=false,sectionCampuses=null) {
  const selected=[],seen=new Set();
  const shuffle=a=>a.map(v=>({v,n:crypto.randomInt(2147483647)})).sort((a,b)=>a.n-b.n).map(x=>x.v);
  for(const section of (common?['research']:['research','subject'])) {
   for(let campus=1;campus<=2;campus++) {
-   const need=single?(pools.some(p=>p.campus===campus)?25:0):(common?(campus===(finalSet==='A'?1:2)?13:12):(section==='research'?(campus===1?13:12):(campus===1?12:13)));
-   const campusPools=pools.filter(p=>p.campus===campus);
+   const planned=sectionCampuses?.[section],sectionSingle=planned?planned.length===1:single;
+   const highCampus=common||sectionCampuses?(finalSet==='A'?1:2):1;
+   const need=sectionSingle?((planned?planned.includes(campus):pools.some(p=>p.campus===campus))?25:0):(common||section==='research'?(campus===highCampus?13:12):(campus===highCampus?12:13));
+   const campusPools=pools.filter(p=>p.campus===campus&&(!p.section||p.section===section));
    if(campusPools.some(p=>p.set_name)) {
     const firstSet=finalSet==='A'?'A':'B';
     const firstQuota=section==='research'?Math.ceil(need/2):Math.floor(need/2);

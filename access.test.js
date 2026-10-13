@@ -4,6 +4,13 @@ const vani={id:5,role:'coordinator',campus_id:1},infant={id:8,role:'coordinator'
 const rmp={id:201,is_common:true,coordinator_id:5,campus_id:1,faculty_code:'FET'},fet={id:202,is_common:true,coordinator_id:8,campus_id:2,faculty_code:'FET'},fsh={...fet,id:-203,faculty_code:'FSH'},fmhs={...fet,id:-204,faculty_code:'FMHS'};
 test('coordinators access and submit only explicitly assigned common papers',()=>{assert.ok(canSubmit(vani,rmp));assert.ok([fet,fsh,fmhs].every(d=>canSubmit(infant,d)));assert.ok(!scope(vani,fet));assert.ok(!scope(infant,rmp));assert.ok(!scope(infant,{id:30,campus_id:2}));assert.ok(!scope({id:99,role:'coordinator',campus_id:2},fet));assert.ok(!scope({id:22,role:'hod',department_id:201,campus_id:1},rmp));assert.ok(scope({role:'admin'},fet));assert.ok(!canSubmit({role:'admin'},fet));});
 test('common faculty categories stay separate and FET matches across campuses',()=>{assert.equal(departmentKey(rmp),departmentKey(fet));assert.notEqual(departmentKey(fet),departmentKey(fsh));assert.notEqual(departmentKey(fsh),departmentKey(fmhs));});
+test('single-campus subject departments share Common RM with the matching faculty in both campuses',()=>{
+ const {commonRmSources}=require('./public/common-rm');const departments=[rmp,fet,fsh,fmhs];
+ assert.deepEqual(commonRmSources(departments,[{id:4,common_rm_id:201}]).sources.map(c=>c.id),[201,202]);
+ assert.deepEqual(commonRmSources(departments,[{id:4,common_rm_id:201},{id:30,common_rm_id:202}]).sources.map(c=>c.id),[201,202]);
+ assert.deepEqual(commonRmSources(departments,[{id:38,common_rm_id:-203}]).sources.map(c=>c.id),[-203]);
+ assert.deepEqual(commonRmSources(departments,[{id:4,name:'Civil',common_rm_id:999}]).missing,['Civil']);
+});
 test('common papers contain 25 RM questions from both source sets',()=>{const pools=[1,2].flatMap(campus=>['A','B'].map(set_name=>({campus,set_name,questions:Array.from({length:25},(_,i)=>({section:'research',hash:campus+set_name+i}))})));const selected=choose(pools,false,'A',true);assert.equal(selected.length,25);assert.equal(selected.filter(q=>q.source.campus===1).length,13);assert.equal(selected.filter(q=>q.source.campus===2).length,12);const single=choose(pools.filter(p=>p.campus===2),true,'A',true);assert.equal(single.length,25);assert.equal(single.filter(q=>q.source.set_name==='A').length,13);});
 test('department management belongs to Suresh and Ruby admins and the super administrator',()=>{
  for(const username of ['suresh','ruby','SURESH'])assert.equal(canManageDepartments({username,role:'admin'}),true);

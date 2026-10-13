@@ -103,8 +103,13 @@ async function startServer(port){
    const result=await upload(cookie,department,set,fixture(prefix+index));assert.equal(result.status,200,JSON.stringify(result.data));assert.equal(result.data.screening.matched_count,0);assert.equal((await request(cookie,`/papers/${result.data.id}/review`,{})).status,403);assert.equal((await request(ac,`/papers/${result.data.id}/review`,{})).status,200);
   }
   const waiting=await request(ac,'/generate',{department_id:1,set_name:'A'});assert.equal(waiting.status,400);assert.match(waiting.data.error,/Common Research Methodology/);
-  for(const [department,cookie,prefix] of [[201,vc,3000],[202,ic,4000]])for(const [index,set] of ['A','B'].entries()){
-   const result=await upload(cookie,department,set,fixture(prefix+index,{research:true}));assert.equal(result.status,200,JSON.stringify(result.data));assert.equal((await request(ac,`/papers/${result.data.id}/review`,{})).status,200);
+  const cyberSingle=await login('cyber-hod');
+  for(const [index,set] of ['A','B'].entries()){const source=await upload(cyberSingle,14,set,fixture(4400+index));assert.equal(source.status,200);assert.equal((await request(ac,`/papers/${source.data.id}/review`,{})).status,200);}
+  for(const [department,cookie,prefix] of [[201,vc,3000],[202,ic,4000]]){
+   if(department===202){const missingTry=await request(ac,'/generate',{department_id:14,set_name:'A'});assert.equal(missingTry.status,400);assert.match(missingTry.data.error,/Trichy.*Common Research Methodology/);}
+   for(const [index,set] of ['A','B'].entries()){
+    const result=await upload(cookie,department,set,fixture(prefix+index,{research:true}));assert.equal(result.status,200,JSON.stringify(result.data));assert.equal((await request(ac,`/papers/${result.data.id}/review`,{})).status,200);
+   }
   }
   // A restored Linux/Windows deployment must not depend on the original PC path.
   const relocated=new sqlite.Database(path.join(dir,'app','papers.db'));
@@ -131,6 +136,17 @@ async function startServer(port){
    for(const d of [1,30,201,202])for(const s of ['A','B'])assert.ok(manifest.questions.some(q=>q.department_id===d&&q.source_set===s));
    const download=await request(ac,`/generations/${result.data.id}/download`);assert.equal(download.status,200);const output=inspect(download.data);assert.equal(output.questions.length,50);assert.deepEqual(output.questions.map(q=>q.answer),manifest.questions.map(q=>q.answer));for(const q of manifest.questions)assert.equal(q.answer,['A','B','C','D'][(q.source_question_number-1)%4]);
    assert.equal((await request(hc,`/generations/${result.data.id}/download`)).status,403);
+  }
+  // A department available only at Ramapuram uses both FET RM coordinators,
+  // while all 25 subject questions stay with its own HoD's two uploaded sets.
+  const singleHashes=new Set();
+  for(const set_name of ['A','B']){
+   const generated=await request(ac,'/generate',{department_id:14,set_name});assert.equal(generated.status,200,JSON.stringify(generated.data));assert.deepEqual(generated.data.distribution,set_name==='A'?{Ramapuram:38,Trichy:12}:{Ramapuram:37,Trichy:13});assert.equal(generated.data.common_rm.length,2);
+   const record=(await request(ac,`/generations/${generated.data.id}/manifest`)).data;assert.equal(record.questions.length,50);assert.ok(record.questions.filter(q=>q.section==='subject').every(q=>q.campus===1&&q.department_id===14));assert.equal(record.questions.filter(q=>q.section==='subject').length,25);
+   assert.deepEqual(generated.data.section_distribution,record.section_distribution);assert.deepEqual(record.section_distribution,{research:set_name==='A'?{Ramapuram:13,Trichy:12}:{Ramapuram:12,Trichy:13},subject:{Ramapuram:25,Trichy:0}});
+   for(const d of [201,202])for(const sourceSet of ['A','B'])assert.ok(record.questions.some(q=>q.section==='research'&&q.department_id===d&&q.source_set===sourceSet));
+   for(const q of record.questions){assert.ok(!singleHashes.has(q.hash));singleHashes.add(q.hash);}
+   const downloaded=await request(ac,`/generations/${generated.data.id}/download`);assert.deepEqual(inspect(downloaded.data).questions.map(q=>q.answer),record.questions.map(q=>q.answer));
   }
   // Named administrators can add departments, archive their papers and assign existing HoDs.
   const sc=await login('suresh'),rc=await login('ruby');
