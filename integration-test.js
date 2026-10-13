@@ -127,6 +127,8 @@ async function startServer(port){
   for(const set_name of ['A','B']){
    const result=await request(ac,'/generate',{department_id:1,set_name});assert.equal(result.status,200,JSON.stringify(result.data));assert.deepEqual(result.data.distribution,{Ramapuram:25,Trichy:25});assert.equal(result.data.template_name,'Admin-Template-'+set_name+'.docx');assert.equal(result.data.question_count,50);assert.equal(result.data.common_rm.length,2);
    const manifest=(await request(ac,`/generations/${result.data.id}/manifest`)).data;
+   const browserRecord=await fetch(base+`/api/generations/${result.data.id}/manifest`,{headers:{Cookie:ac,Accept:'text/html'}});assert.equal(browserRecord.status,200);assert.ok(browserRecord.headers.get('content-type').includes('text/html'));assert.ok((await browserRecord.text()).includes('/source-record-page.js'));
+   const explicitJson=await fetch(base+`/api/generations/${result.data.id}/manifest?format=json`,{headers:{Cookie:ac,Accept:'text/html'}});assert.equal(explicitJson.status,200);assert.equal((await explicitJson.json()).questions.length,50);
    assert.equal(manifest.department_name,'Mechanical Engineering');assert.equal(manifest.set_name,set_name);
    assert.ok(manifest.questions.every(q=>q.source_file==='fixture.docx'&&['Ramapuram','Trichy'].includes(q.source_campus)&&q.source_department&&q.source_download_available));
    const csv=await request(ac,`/generations/${result.data.id}/source-csv`);assert.equal(csv.status,200);assert.ok(csv.data.toString('utf8').includes('"Final question number"'));assert.ok(csv.data.toString('utf8').includes('Common Research Methodology (FET)'));
@@ -134,7 +136,7 @@ async function startServer(port){
    assert.equal(manifest.questions.length,50);assert.equal(manifest.questions.filter(q=>q.section==='research').length,25);
    for(const q of manifest.questions){assert.ok(!allHashes.has(q.hash));allHashes.add(q.hash);assert.ok((q.section==='research'?[201,202]:[1,30]).includes(q.department_id));}
    for(const d of [1,30,201,202])for(const s of ['A','B'])assert.ok(manifest.questions.some(q=>q.department_id===d&&q.source_set===s));
-   const download=await request(ac,`/generations/${result.data.id}/download`);assert.equal(download.status,200);const output=inspect(download.data);assert.equal(output.questions.length,50);assert.deepEqual(output.questions.map(q=>q.answer),manifest.questions.map(q=>q.answer));for(const q of manifest.questions)assert.equal(q.answer,['A','B','C','D'][(q.source_question_number-1)%4]);
+   const download=await request(ac,`/generations/${result.data.id}/download`);assert.equal(download.status,200);const output=inspect(download.data);assert.equal(output.questions.length,50);assert.deepEqual(output.questions.map(q=>q.answer),manifest.questions.map(q=>q.answer));for(const q of manifest.questions)assert.equal(q.answer,['A','B','C','D'][(q.source_question_number-1)%4]);const finalXml=new Zip(download.data).file('word/document.xml').asText();assert.ok(finalXml.includes('DEPARTMENT OF MECHANICAL ENGINEERING'));assert.ok(finalXml.includes('FACULTY OF ENGINEERING AND TECHNOLOGY'));
    assert.equal((await request(hc,`/generations/${result.data.id}/download`)).status,403);
   }
   // A department available only at Ramapuram uses both FET RM coordinators,

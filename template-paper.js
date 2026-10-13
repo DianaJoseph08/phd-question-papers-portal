@@ -144,9 +144,10 @@ function generateFromTemplate(selected,title,set,templateBuffer,{facultyName=''}
  const half=t.columns===4?Math.ceil(ordered.length/2):ordered.length,prototype=t.rows[1];for(const row of t.rows.slice(1))t.keyTable.removeChild(row);
  for(let i=0;i<half;i++){const row=prototype.cloneNode(true),cells=children(row).filter(n=>n.nodeName==='w:tc'),values=t.columns===4?[i+1,ordered[i].answer,i+half<ordered.length?i+half+1:'',ordered[i+half]?.answer||'']:[i+1,ordered[i].answer];cells.forEach((c,j)=>writeCell(c,values[j],doc));t.keyTable.appendChild(row);}
  for(const p of Array.from(doc.getElementsByTagName('w:p'))){
-  replaceText(p,/\{\{\s*department\s*\}\}|DEPARTMENT OF[ \t]*_{3,}/gi,'DEPARTMENT OF '+title);
-  replaceText(p,/Department(?: name)?[ \t]*:[ \t]*_{3,}/gi,'Department: '+title);
-  if(facultyName)replaceText(p,/\{\{\s*faculty\s*\}\}|FACULTY OF[ \t]*_{3,}/gi,'FACULTY OF '+facultyName.replace(/^(?:faculty|college) of\s+/i,''));
+  replaceText(p,/\{\{\s*department\s*\}\}|DEPARTMENT OF[ \t]*_{3,}/gi,'DEPARTMENT OF '+String(title).toUpperCase());
+  replaceText(p,/Department(?: name)?[ \t]*:[ \t]*_{3,}/gi,'DEPARTMENT: '+String(title).toUpperCase());
+  if(facultyName)replaceText(p,/\{\{\s*faculty\s*\}\}|(?:FACULTY|COLLEGE) OF[ \t]*_{3,}/gi,/^(?:faculty|college|school|institute)\b/i.test(facultyName)?facultyName.toUpperCase():'FACULTY OF '+facultyName.toUpperCase());
+  if(facultyName)replaceText(p,/\{\{\s*institute\s*\}\}|(?:Institute|Institution)(?: name)?[ \t]*:[ \t]*_{3,}/gi,'INSTITUTE: '+facultyName.toUpperCase());
   replaceText(p,/\{\{\s*set\s*\}\}/gi,set);
   if(!subjects.length&&/Maximum Marks/i.test(visible(p)))for(const n of [...Array.from(p.getElementsByTagName('w:t')),...Array.from(p.getElementsByTagName('m:t'))])n.textContent=n.textContent.replace(/\b50\b/g,'25');
  }

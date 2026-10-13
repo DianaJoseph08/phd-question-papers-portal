@@ -7,7 +7,7 @@ function sectionDistribution(questions){
 }
 function sourceRecord(g,departments,papers){
  const questions=JSON.parse(g.manifest).map(q=>sourceDetails(q,departments,papers)).sort((a,b)=>a.number-b.number);
- return {id:g.id,department_name:g.department_name,set_name:g.set_name,created_at:g.created_at,distribution:JSON.parse(g.distribution),section_distribution:sectionDistribution(questions),questions};
+ return {id:g.id,department_key:g.department_key,department_name:g.department_name,set_name:g.set_name,created_at:g.created_at,distribution:JSON.parse(g.distribution),section_distribution:sectionDistribution(questions),questions};
 }
 function sourceCsv(record){
  // Excel must treat uploaded text and filenames as text, including a leading formula character.

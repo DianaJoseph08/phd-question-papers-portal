@@ -18,13 +18,17 @@ function sourceRecordHtml(record){
 }
 async function showSourceRecord(id){
  try{
-  const record=await api(`/generations/${encodeURIComponent(id)}/manifest`);
+  const record=await api(`/generations/${encodeURIComponent(id)}/manifest?format=json`);
   $('#previewContent').innerHTML=sourceRecordHtml(record);
-  for(const selector of ['#sourceSearch','#sourceCampus','#sourceSection'])$(selector).oninput=()=>{
-   const search=$('#sourceSearch').value.trim().toLowerCase(),campus=$('#sourceCampus').value,section=$('#sourceSection').value;
-   const questions=record.questions.filter(q=>(!campus||q.source_campus===campus)&&(!section||q.section===section)&&(!search||[q.number,q.text,q.source_campus,q.source_department,q.source_institution,q.source_file,q.source_coordinator].join(' ').toLowerCase().includes(search)));
-   $('#sourceRows').innerHTML=sourceRecordRows(questions);$('#sourceCount').textContent=`Showing ${questions.length} of ${record.questions.length} questions`;
-  };
+  bindSourceRecordFilters(record);
   if(!$('#preview').open)$('#preview').showModal();
  }catch(e){message(e.message);}
+}
+
+function bindSourceRecordFilters(record){
+ for(const selector of ['#sourceSearch','#sourceCampus','#sourceSection'])$(selector).oninput=()=>{
+  const search=$('#sourceSearch').value.trim().toLowerCase(),campus=$('#sourceCampus').value,section=$('#sourceSection').value;
+  const questions=record.questions.filter(q=>(!campus||q.source_campus===campus)&&(!section||q.section===section)&&(!search||[q.number,q.text,q.source_campus,q.source_department,q.source_institution,q.source_file,q.source_coordinator].join(' ').toLowerCase().includes(search)));
+  $('#sourceRows').innerHTML=sourceRecordRows(questions);$('#sourceCount').textContent=`Showing ${questions.length} of ${record.questions.length} questions`;
+ };
 }

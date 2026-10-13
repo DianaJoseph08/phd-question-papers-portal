@@ -98,7 +98,7 @@ get('/api/state',async(req,res)=>{
  ) ORDER BY p.created_at DESC,p.rowid DESC`);
  const visible=rows.filter(p=>scope(req.user,departments.find(d=>d.id===p.department_id)||{})&&(admin(req.user)||p.kind==='archive'||p.uploaded_by===req.user.id||req.user.role==='coordinator'));
  const current=[];for(const p of visible)current.push(await currentSubmissionCounts(p));
- res.json({user:req.user,can_use_papers:paperAccess(req.user),can_manage_departments:canManageDepartments(req.user),institutions:canManageDepartments(req.user)?registry.institutions:[],hod_accounts:canManageDepartments(req.user)?registry.hods:[],departments:admin(req.user)?departments:departments.filter(d=>scope(req.user,d)),papers:current.map(({path:ignored,...p})=>p),templates:paperAccess(req.user)?await all(persistence.db,'SELECT set_name,original_name,updated_at FROM templates'):[],generations:admin(req.user)?await all(persistence.db,'SELECT id,department_name,set_name,distribution,created_at FROM generations ORDER BY created_at DESC'):[]});
+ res.json({user:req.user,can_use_papers:paperAccess(req.user),can_manage_departments:canManageDepartments(req.user),institutions:canManageDepartments(req.user)?registry.institutions:[],hod_accounts:canManageDepartments(req.user)?registry.hods:[],departments:admin(req.user)?departments:departments.filter(d=>scope(req.user,d)),papers:current.map(({path:ignored,...p})=>p),templates:paperAccess(req.user)?await all(persistence.db,'SELECT set_name,original_name,updated_at FROM templates'):[],generations:admin(req.user)?await all(persistence.db,'SELECT id,department_key,department_name,set_name,distribution,created_at FROM generations ORDER BY created_at DESC,rowid DESC'):[]});
 });
 function requireAdmin(req,res,next){if(!admin(req.user))return res.status(403).json({error:'Administrator access required.'});next();}
 get('/api/audit',requireAdmin,async(req,res)=>res.json(await audit.list(req.query)));
@@ -250,9 +250,18 @@ post('/api/generate',requireAdmin,async(req,res)=>{
  await run('INSERT INTO generations (id,department_key,department_name,set_name,path,distribution,manifest) VALUES (?,?,?,?,?,?,?)',[id,departmentKey(department),department.name,set,file,distribution,manifest]);
  await audit.log(req.user,'paper.generated','generation',id,{department:department.name,set,distribution:JSON.parse(distribution),template:template.original_name});
  await persistence.commit();
- res.json({id,template_name:template.original_name,distribution:JSON.parse(distribution),question_count:chosen.length,section_distribution:require('./source-record').sectionDistribution(chosen),common_rm:sharedCommon.sources.map(c=>({campus:c.campus,category:c.name,coordinator:c.coordinator_name}))});
+ res.json({id,department_key:departmentKey(department),department_name:department.name,set_name:set,template_name:template.original_name,distribution:JSON.parse(distribution),question_count:chosen.length,section_distribution:require('./source-record').sectionDistribution(chosen),common_rm:sharedCommon.sources.map(c=>({campus:c.campus,category:c.name,coordinator:c.coordinator_name}))});
 });
-get('/api/generations/:id/:action',requireAdmin,async(req,res)=>{const g=(await all(persistence.db,'SELECT * FROM generations WHERE id=?',[req.params.id]))[0];if(!g)return res.status(404).end();if(['manifest','source-csv'].includes(req.params.action)){const papers=await all(persistence.db,'SELECT id,original_name,deleted_at FROM papers'),record=require('./source-record').sourceRecord(g,departments,papers);if(req.params.action==='manifest')return res.json(record);res.attachment('January-2027-'+g.department_name.replace(/[^a-z0-9]/gi,'-')+'-Set-'+g.set_name+'-Source-Record.csv');res.type('text/csv');return res.send(require('./source-record').sourceCsv(record));}if(req.params.action!=='download')return res.status(404).end();const localPath=await ensureFileLocal(g.path);res.download(localPath,`January-2027-${g.department_name.replace(/[^a-z0-9]/gi,'-')}-Set-${g.set_name}.docx`);});
+get('/api/generations/:id/:action',requireAdmin,async(req,res)=>{
+ const g=(await all(persistence.db,'SELECT * FROM generations WHERE id=?',[req.params.id]))[0];if(!g)return res.status(404).end();
+ if(req.params.action==='manifest'&&req.query.format!=='json'&&/text\/html/i.test(req.get('accept')||'')){res.vary('Accept');return res.sendFile(path.join(root,'public','source-record.html'));}
+ if(['manifest','source-csv'].includes(req.params.action)){
+  const papers=await all(persistence.db,'SELECT id,original_name,deleted_at FROM papers'),record=require('./source-record').sourceRecord(g,departments,papers);
+  if(req.params.action==='manifest'){res.vary('Accept');return res.json(record);}
+  res.attachment('January-2027-'+g.department_name.replace(/[^a-z0-9]/gi,'-')+'-Set-'+g.set_name+'-Source-Record.csv');res.type('text/csv');return res.send(require('./source-record').sourceCsv(record));
+ }
+ if(req.params.action!=='download')return res.status(404).end();const localPath=await ensureFileLocal(g.path);res.download(localPath,`January-2027-${g.department_name.replace(/[^a-z0-9]/gi,'-')}-Set-${g.set_name}.docx`);
+});
 app.use(express.static(path.join(root,'public')));
 app.use((err,req,res,next)=>{console.error(err.message);res.status(err.status||400).json({...err.details,error:err.code==='LIMIT_FILE_SIZE'?'Maximum upload size is 20 MB.':err.message||'Request failed.'});});
 async function start(){

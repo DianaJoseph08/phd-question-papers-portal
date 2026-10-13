@@ -23,7 +23,7 @@ test('admin layout, footer, styles and key grid are preserved while questions an
  const selected=source(t,{math:true}),template=new Zip(templateFixture('B'));template.file('customXml/item1.xml','<admin-layout/>');
  const output=new Zip(generate(selected,'Civil Engineering','B',template.generate({type:'nodebuffer'}),{facultyName:'Faculty of Engineering and Technology'})),xml=output.file('word/document.xml').asText();
  for(const part of ['word/styles.xml','word/footer1.xml','customXml/item1.xml'])assert.deepEqual(output.file(part).asNodeBuffer(),template.file(part).asNodeBuffer());
- assert.ok(xml.includes('Official Template B')&&xml.includes('Instructions supplied by administrator B'));assert.ok(xml.includes('DEPARTMENT OF Civil Engineering'));assert.ok(xml.includes('FACULTY OF Engineering and Technology'));assert.ok(xml.includes('w:top="1800"'));assert.ok(!xml.includes('Question starts here')&&!xml.includes('Option A'));
+ assert.ok(xml.includes('Official Template B')&&xml.includes('Instructions supplied by administrator B'));assert.ok(xml.includes('DEPARTMENT OF CIVIL ENGINEERING'));assert.ok(xml.includes('FACULTY OF ENGINEERING AND TECHNOLOGY'));assert.ok(xml.includes('w:top="1800"'));assert.ok(!xml.includes('Question starts here')&&!xml.includes('Option A'));
  const parsed=inspect(output.generate({type:'nodebuffer'}));assert.deepEqual(parsed.counts,{research:25,subject:25});assert.ok(parsed.questions.every(q=>q.answer==='B'&&!q.answer_error));
  const d=new DOMParser().parseFromString(xml,'application/xml'),questionPs=parsed.questions[0].xml;assert.equal((questionPs.match(/<w:p[\s>]/g)||[]).length,5);assert.ok(questionPs.includes('Georgia')&&!questionPs.includes('Arial'));assert.ok(xml.includes('m:oMath')&&xml.includes('x=2'));
  assert.equal(d.getElementsByTagName('w:tr').length,26);assert.equal(d.getElementsByTagName('w:gridCol')[0].getAttribute('w:w'),'2000');
@@ -32,6 +32,12 @@ test('Common RM output uses the admin template with 25 answers and no unused sub
  const output=generate(source(t,{common:true}),'Common Research Methodology','A',templateFixture('A'));
  const xml=new Zip(output).file('word/document.xml').asText(),d=new DOMParser().parseFromString(xml,'application/xml'),parsed=inspect(output);
  assert.equal(parsed.questions.length,25);assert.ok(parsed.questions.every(q=>q.answer==='B'));assert.ok(!xml.includes('Subject-Specific Questions'));assert.equal(d.getElementsByTagName('w:tr').length,14);
+});
+test('capital headings use the exact institute name while preserving question text and template formatting',t=>{
+ const template=new Zip(templateFixture('A'));template.file('word/document.xml',template.file('word/document.xml').asText().replace('DEPARTMENT OF ___________________________','Department name: ___________________________').replace('FACULTY OF ___________________________','Institute name: ___________________________'));
+ const output=new Zip(generate(source(t),'Civil Engineering','A',template.generate({type:'nodebuffer'}),{facultyName:'College of Engineering and Technology'})),xml=output.file('word/document.xml').asText();
+ assert.ok(xml.includes('DEPARTMENT: CIVIL ENGINEERING'));assert.ok(xml.includes('INSTITUTE: COLLEGE OF ENGINEERING AND TECHNOLOGY'));assert.ok(xml.includes('Which result applies to Research Methodology sample 1?'));assert.deepEqual(output.file('word/styles.xml').asNodeBuffer(),template.file('word/styles.xml').asNodeBuffer());
+ const college=new Zip(generate(source(t),'Mathematics','B',templateFixture('B'),{facultyName:'College of Science and Humanities'})).file('word/document.xml').asText();assert.ok(college.includes('COLLEGE OF SCIENCE AND HUMANITIES'));assert.ok(college.includes('DEPARTMENT OF MATHEMATICS'));
 });
 test('question images are imported without overwriting template relationships or template media',t=>{
  const selected=source(t,{image:true}),template=new Zip(templateFixture('A'));template.file('word/media/image1.png','admin-logo');
