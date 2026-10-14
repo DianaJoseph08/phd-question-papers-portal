@@ -47,9 +47,11 @@ if(process.env.TRUST_PROXY==='1'||process.env.TRUST_PROXY==='true'||process.env.
 app.disable('x-powered-by');app.use(express.json({limit:'1mb'}));
 app.use((req,res,next)=>{res.set('X-Content-Type-Options','nosniff');res.set('Referrer-Policy','same-origin');res.set('Cache-Control','no-store');res.set('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; frame-ancestors 'none'; form-action 'self'");if(!['GET','HEAD','OPTIONS'].includes(req.method)&&req.get('origin')&&req.get('origin')!==`${req.protocol}://${req.get('host')}`)return res.status(403).json({error:'Cross-origin request refused.'});next();});
 const upload=multer({storage:multer.memoryStorage(),limits:{fileSize:20*1024*1024,files:1}});
-const {admin,scope,canSubmit,canManageDepartments}=require('./access');
+const {admin,scope,canSubmit,canManageDepartments,canViewPaper,canTrackSubmissions}=require('./access');
+const {coordinatorAssignment}=require('./coordinators');
+const {trackedDepartments,currentSubmissions,buildTracker}=require('./submission-tracker');
 let departments=[],registry,accounts,audit;
-const paperAccess=user=>admin(user)||user.role==='hod'||departments.some(d=>d.is_common&&scope(user,d));
+const paperAccess=user=>admin(user)||user.role==='hod'||canTrackSubmissions(user)||departments.some(d=>d.is_common&&scope(user,d));
 async function ensurePortalSchema(){
  await accounts.ensure();await audit.ensure();
  const columns=await all(persistence.db,'PRAGMA table_info(papers)');
@@ -89,16 +91,34 @@ async function currentSubmissionCounts(p){
  }catch(e){return {...p,count_warning:'Original document could not be read. Previously stored counts are shown.'};}
 }
 get('/api/state',async(req,res)=>{
- if(req.user.must_change_password)return res.json({user:req.user,can_use_papers:false,can_manage_departments:false,institutions:[],hod_accounts:[],departments:[],papers:[],templates:[],generations:[]});
+ if(req.user.must_change_password)return res.json({user:req.user,can_use_papers:false,can_manage_departments:false,can_track_submissions:false,can_upload_papers:false,submission_department_ids:[],institutions:[],hod_accounts:[],departments:[],papers:[],templates:[],generations:[]});
  const rows=await all(persistence.db,`SELECT p.* FROM papers p WHERE p.deleted_at IS NULL AND NOT EXISTS (
   SELECT 1 FROM papers newer
   WHERE newer.department_id=p.department_id AND newer.campus_id=p.campus_id
    AND newer.session=p.session AND newer.set_name=p.set_name AND newer.kind=p.kind
    AND (newer.created_at>p.created_at OR (newer.created_at=p.created_at AND newer.rowid>p.rowid))
  ) ORDER BY p.created_at DESC,p.rowid DESC`);
- const visible=rows.filter(p=>scope(req.user,departments.find(d=>d.id===p.department_id)||{})&&(admin(req.user)||p.kind==='archive'||p.uploaded_by===req.user.id||req.user.role==='coordinator'));
+ const visible=rows.filter(p=>canViewPaper(req.user,departments.find(d=>d.id===p.department_id)||{})&&(admin(req.user)||p.kind==='archive'||p.uploaded_by===req.user.id||req.user.role==='coordinator'));
  const current=[];for(const p of visible)current.push(await currentSubmissionCounts(p));
- res.json({user:req.user,can_use_papers:paperAccess(req.user),can_manage_departments:canManageDepartments(req.user),institutions:canManageDepartments(req.user)?registry.institutions:[],hod_accounts:canManageDepartments(req.user)?registry.hods:[],departments:admin(req.user)?departments:departments.filter(d=>scope(req.user,d)),papers:current.map(({path:ignored,...p})=>p),templates:paperAccess(req.user)?await all(persistence.db,'SELECT set_name,original_name,updated_at FROM templates'):[],generations:admin(req.user)?await all(persistence.db,'SELECT id,department_key,department_name,set_name,distribution,created_at FROM generations ORDER BY created_at DESC,rowid DESC'):[]});
+ const submission_department_ids=departments.filter(d=>canSubmit(req.user,d)).map(d=>d.id);
+ res.json({user:req.user,can_use_papers:paperAccess(req.user),can_manage_departments:canManageDepartments(req.user),can_track_submissions:canTrackSubmissions(req.user),coordinator_assignment:coordinatorAssignment(req.user),can_upload_papers:admin(req.user)||submission_department_ids.length>0,submission_department_ids,institutions:canManageDepartments(req.user)?registry.institutions:[],hod_accounts:canManageDepartments(req.user)?registry.hods:[],departments:admin(req.user)?departments:departments.filter(d=>canViewPaper(req.user,d)),papers:current.map(({path:ignored,...p})=>p),templates:paperAccess(req.user)?await all(persistence.db,'SELECT set_name,original_name,updated_at FROM templates'):[],generations:admin(req.user)?await all(persistence.db,'SELECT id,department_key,department_name,set_name,distribution,created_at FROM generations ORDER BY created_at DESC,rowid DESC'):[]});
+});
+const trackingChecksCache=new Map();
+get('/api/submission-tracker',async(req,res)=>{
+ if(!canTrackSubmissions(req.user))return res.status(403).json({error:'Research coordinator or administrator access required.'});
+ const allowed=trackedDepartments(req.user,departments),ids=new Set(allowed.map(d=>d.id));
+ const papers=(await all(persistence.db,"SELECT * FROM papers WHERE kind='submission' AND session='January 2027' ORDER BY created_at DESC,rowid DESC")).filter(p=>ids.has(p.department_id)&&allowed.some(d=>d.id===p.department_id&&d.campus_id===p.campus_id));
+ const screenings=new Map((await all(persistence.db,'SELECT paper_id,report FROM screenings')).map(s=>[s.paper_id,s.report])),checks=new Map();
+ for(const paper of currentSubmissions(papers)){
+  try{
+   const d=allowed.find(d=>d.id===paper.department_id),file=await ensureFileLocal(paper.path),stat=fs.statSync(file),key=[paper.id,stat.mtimeMs,stat.size,d.name,d.common_rm_id,d.is_common].join('|');
+   let template=trackingChecksCache.get(key);
+   if(!template){const buffer=fs.readFileSync(file),info=inspectForDepartment(buffer,d);template=validateTemplate(buffer,d,info);if(trackingChecksCache.size>500)trackingChecksCache.clear();trackingChecksCache.set(key,template);}
+   checks.set(paper.id,{template});
+  }catch(e){checks.set(paper.id,{error:'The original Word file could not be checked. Ask the administrator to verify the document before generation.'});}
+ }
+ const attempts=await all(persistence.db,"SELECT actor_name,created_at,details FROM audit_events WHERE action='paper.rejected' ORDER BY created_at DESC,rowid DESC");
+ res.json(buildTracker({user:req.user,departments:allowed,users:accounts.users,papers,screenings,checks,attempts}));
 });
 function requireAdmin(req,res,next){if(!admin(req.user))return res.status(403).json({error:'Administrator access required.'});next();}
 get('/api/generations',requireAdmin,async(req,res)=>res.json(await all(persistence.db,'SELECT id,department_key,department_name,set_name,distribution,created_at FROM generations ORDER BY created_at DESC,rowid DESC')));
@@ -186,7 +206,7 @@ post('/api/papers/:id/remove',requireAdmin,async(req,res)=>{
 });
 get('/api/papers/:id/:action',async(req,res)=>{
  const p=(await all(persistence.db,'SELECT * FROM papers WHERE id=?',[req.params.id]))[0];const d=p&&departments.find(d=>d.id===p.department_id);
- if(!p||p.deleted_at||!scope(req.user,d)||(!admin(req.user)&&p.kind==='submission'&&p.uploaded_by!==req.user.id&&req.user.role!=='coordinator'))return res.status(404).json({error:'Paper not found.'});
+ if(!p||p.deleted_at||!canViewPaper(req.user,d)||(!admin(req.user)&&p.kind==='submission'&&p.uploaded_by!==req.user.id&&req.user.role!=='coordinator'))return res.status(404).json({error:'Paper not found.'});
  const localPath=await ensureFileLocal(p.path);
  if(req.params.action==='download')return res.download(localPath,p.original_name);
  if(req.params.action!=='preview')return res.status(404).end();

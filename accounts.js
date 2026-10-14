@@ -1,6 +1,7 @@
 const crypto=require('crypto');
 const {promisify}=require('util');
 const {all,run}=require('./persistent-data');
+const {canTrack}=require('./coordinators');
 const scrypt=promisify(crypto.scrypt);
 async function hashPassword(password){const salt=crypto.randomBytes(16).toString('hex');const key=await scrypt(password,salt,64);return `scrypt$${salt}$${key.toString('hex')}`;}
 async function verifyHash(password,stored){
@@ -60,7 +61,7 @@ class Accounts{
   const credentials=new Map((await all(this.db(),'SELECT user_id,must_change_password,updated_at FROM user_credentials')).map(c=>[c.user_id,c]));
   return this.users.map(({password:ignored,...u})=>{
    const c=credentials.get(u.id);
-   return {...u,password_status:c?(c.must_change_password?'Change required':'Changed securely'):'Existing admission password',password_updated_at:c?.updated_at||null,departments:departments.filter(d=>d.is_common?d.coordinator_id===u.id:d.is_custom?d.hod_user_id===u.id:d.id===u.department_id).map(d=>d.name+' · '+d.campus)};
+   return {...u,password_status:c?(c.must_change_password?'Change required':'Changed securely'):'Existing admission password',password_updated_at:c?.updated_at||null,departments:departments.filter(d=>canTrack(u,d)||(d.is_common?d.coordinator_id===u.id:d.is_custom?d.hod_user_id===u.id:d.id===u.department_id)).map(d=>d.name+' · '+d.campus)};
   });
  }
 }
