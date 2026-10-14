@@ -43,9 +43,11 @@ From an up-to-date checkout in Cloud Shell, run:
 bash restore-removed-archives.sh --apply
 ```
 
-This restores the latest removed January/July 2026 archive for each department, campus, session and set. A newer uploaded version takes precedence, including when timestamps match. Older superseded versions and January 2027 submissions are excluded. Original upload details are retained and each restoration receives a `paper.restored` admin audit entry identifying the active Cloud Shell account.
+This restores the latest removed January/July 2026 archive for each department, campus, session and set. It also compares the live database with the recovery snapshot's 156 latest archive slots and inserts the backup paper only when the entire slot is absent from the live database. An existing live version always takes precedence over the backup; a newer uploaded version takes precedence over an older removed version, including when timestamps match. Older superseded backup versions and January 2027 submissions are excluded. Original upload details are retained and each restoration receives a `paper.restored` admin audit entry identifying the active Cloud Shell account.
 
 The script reads the running service's bucket setting, checks the original Word files, saves a private database backup under `recovery/`, and publishes a snapshot with a generation-match precondition. If another save occurs first, it refuses to overwrite it and asks you to rerun the command. A missing Word file is recovered only when its exact stored filename exists in the repository's recovery files; otherwise recovery stops before publishing the database. Refresh the portal after the verified success message; deployment is not required. Run without `--apply` to preview the affected records without changing cloud data.
+
+The output reports archive rows by session, visible current sets, removed sets and missing backup slots. If both recovery counts are zero, no cloud data is changed. Select **All departments**, **All sessions** and **All campuses** in the Question papers library and refresh. If a paper is still absent, keep the inventory output and identify its department, campus, session and set; the backup cannot recover a paper that was never included in it. Earlier versions of this script checked only removed rows, so their zero result did not check for missing database records.
 
 Recovery tests use isolated fixtures: `python3 restore-removed-archives.test.py`.
 

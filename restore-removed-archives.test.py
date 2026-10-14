@@ -90,6 +90,26 @@ class RecoveryTests(unittest.TestCase):
         path.write_bytes(self.cloud.objects['gs://test-bucket/database/papers.db'])
         with contextlib.closing(sqlite3.connect(path)) as db:
             return db.execute('SELECT * FROM ' + table).fetchall()
+    def change_live(self, sql, values=()):
+        path = pathlib.Path(self.temp.name) / 'edit-live.db'
+        path.write_bytes(self.cloud.objects['gs://test-bucket/database/papers.db'])
+        with contextlib.closing(sqlite3.connect(path)) as db:
+            db.execute(sql, values)
+            db.commit()
+        self.cloud.objects['gs://test-bucket/database/papers.db'] = path.read_bytes()
+    def make_seed(self):
+        seed = pathlib.Path(self.temp.name) / 'seed'
+        (seed / 'files').mkdir(parents=True)
+        path = seed / 'papers.db'
+        path.write_bytes(self.file.read_bytes())
+        with contextlib.closing(sqlite3.connect(path)) as db:
+            # The shipped 2026 snapshot predates soft removal and has no removal columns.
+            db.execute('ALTER TABLE papers DROP COLUMN deleted_at')
+            db.execute('ALTER TABLE papers DROP COLUMN deleted_by')
+            for name, in db.execute('SELECT id FROM papers'):
+                (seed / 'files' / (name + '.docx')).write_bytes(b'recovered-original')
+            db.commit()
+        return seed
     def test_selects_latest_removed_past_sets_only(self):
         with contextlib.closing(sqlite3.connect(self.file)) as db:
             self.assertEqual({r['id'] for r in recovery.removed_current_archives(db)},
@@ -150,11 +170,77 @@ class RecoveryTests(unittest.TestCase):
     def test_missing_word_can_be_recovered_from_the_matching_seed_file(self):
         key = 'gs://test-bucket/files/restore-a.docx'
         del self.cloud.objects[key]
-        seed = pathlib.Path(self.temp.name) / 'seed'
-        (seed / 'files').mkdir(parents=True)
-        (seed / 'files' / 'restore-a.docx').write_bytes(b'recovered-original')
+        seed = self.make_seed()
         self.assertEqual(self.run_recovery(apply=True, seed=seed), 3)
         self.assertEqual(self.cloud.objects[key], b'recovered-original')
+    def test_missing_entire_slots_restore_only_latest_backup_papers(self):
+        seed = self.make_seed()
+        self.change_live("DELETE FROM papers WHERE id='restore-a' OR department_id=5")
+        self.assertEqual(self.run_recovery(apply=True, seed=seed), 3)
+        result = {row[0]: row for row in self.cloud_rows('papers')}
+        self.assertIn('restore-a', result)
+        self.assertIn('restore-latest-c', result)
+        self.assertNotIn('historical-c', result)
+        self.assertEqual(result['restore-a'][8:12], (7, '2026-10-01', None, None))
+        self.assertEqual(result['upcoming'][10], '2026-10-14')
+        self.assertEqual(self.cloud_rows('user_credentials'), [(1, 'unchanged-test-value')])
+        self.assertEqual(self.cloud_rows('generations'), [('saved-a', 'unchanged-source-record')])
+        methods = [json.loads(row[7])['recovery_method'] for row in self.cloud_rows('audit_events')]
+        self.assertEqual(methods.count('backup_missing_slot'), 2)
+        self.assertEqual(self.run_recovery(apply=True, seed=seed), 0)
+    def test_existing_newer_upload_is_kept_even_if_backup_id_is_missing(self):
+        seed = self.make_seed()
+        self.change_live("UPDATE papers SET id='newer-a',original_name='newer-paper.docx',created_at='2026-10-14',deleted_at=NULL,deleted_by=NULL WHERE id='restore-a'")
+        self.assertEqual(self.run_recovery(apply=True, seed=seed), 2)
+        result = {row[0]: row for row in self.cloud_rows('papers')}
+        self.assertNotIn('restore-a', result)
+        self.assertEqual(result['newer-a'][6], 'newer-paper.docx')
+    def test_backup_never_restores_upcoming_or_other_session_records(self):
+        seed = self.make_seed()
+        self.change_live("DELETE FROM papers WHERE id IN ('upcoming','other-session')")
+        self.assertEqual(self.run_recovery(apply=True, seed=seed), 3)
+        result = {row[0] for row in self.cloud_rows('papers')}
+        self.assertNotIn('upcoming', result)
+        self.assertNotIn('other-session', result)
+    def test_id_reassigned_to_a_different_live_slot_aborts_without_writes(self):
+        seed = self.make_seed()
+        self.change_live("UPDATE papers SET department_id=99 WHERE id='restore-a'")
+        with self.assertRaisesRegex(RuntimeError, 'different live record'):
+            self.run_recovery(apply=True, seed=seed)
+        self.assertEqual(self.cloud.uploads, [])
+    def test_missing_backup_document_aborts_before_any_cloud_write(self):
+        seed = self.make_seed()
+        self.change_live("DELETE FROM papers WHERE id='restore-a'")
+        del self.cloud.objects['gs://test-bucket/files/restore-a.docx']
+        (seed / 'files' / 'restore-a.docx').unlink()
+        with self.assertRaisesRegex(RuntimeError, 'no recoverable Word file'):
+            self.run_recovery(apply=True, seed=seed)
+        self.assertEqual(self.cloud.uploads, [])
+    def test_all_present_reports_inventory_and_makes_no_writes(self):
+        seed = self.make_seed()
+        self.change_live("UPDATE papers SET deleted_at=NULL,deleted_by=NULL WHERE kind='archive'")
+        self.assertEqual(self.run_recovery(apply=True, seed=seed), 0)
+        self.assertIn('Visible current January/July 2026 sets: 5', self.output.getvalue())
+        self.assertIn('Backup sets missing from the live database: 0', self.output.getvalue())
+        self.assertIn('All departments, All sessions and All campuses', self.output.getvalue())
+        self.assertEqual(self.cloud.uploads, [])
+    def test_missing_rows_can_be_inserted_into_database_without_removal_columns(self):
+        seed = self.make_seed()
+        self.cloud.objects['gs://test-bucket/database/papers.db'] = (seed / 'papers.db').read_bytes()
+        self.change_live("DELETE FROM papers WHERE id='restore-a'")
+        self.assertEqual(self.run_recovery(apply=True, seed=seed), 1)
+        self.assertIn('restore-a', {row[0] for row in self.cloud_rows('papers')})
+    def test_stale_missing_plan_cannot_replace_existing_slot(self):
+        seed = self.make_seed()
+        with contextlib.closing(sqlite3.connect(self.file)) as db:
+            row = next(row for row in recovery.backup_archives(seed) if row['id'] == 'restore-a')
+            with self.assertRaisesRegex(RuntimeError, 'now has a live upload'):
+                recovery.restore_rows(db, [], 'admin@example.test', 'test', missing=[row])
+    def test_missing_seed_database_aborts_before_cloud_writes(self):
+        seed = pathlib.Path(self.temp.name) / 'absent-seed'
+        with self.assertRaisesRegex(RuntimeError, 'saved recovery database is missing'):
+            self.run_recovery(apply=True, seed=seed)
+        self.assertEqual(self.cloud.uploads, [])
     def test_old_database_without_removal_columns_is_unchanged(self):
         path = pathlib.Path(self.temp.name) / 'old.db'
         with contextlib.closing(sqlite3.connect(path)) as db:

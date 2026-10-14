@@ -1,4 +1,4 @@
-"""Restore only current, soft-removed 2026 archive sets in the live cloud database."""
+"""Restore removed or missing January/July 2026 archive sets without replacing live uploads."""
 import argparse
 import contextlib
 import datetime
@@ -14,17 +14,18 @@ PROJECT = 'pragmatic-app-505807-g5'
 REGION = 'asia-south1'
 SERVICE = 'phd-portal'
 DATABASE_KEY = 'database/papers.db'
+PAST_SESSIONS = ('January 2026', 'July 2026')
 
 
-def removed_current_archives(db):
-    columns = {row[1] for row in db.execute('PRAGMA table_info(papers)')}
-    if 'deleted_at' not in columns:
-        return []
+def slot(row):
+    return tuple(row[key] for key in ('department_id', 'campus_id', 'session', 'set_name', 'kind'))
+
+
+def latest_archives(db):
     db.row_factory = sqlite3.Row
     return [dict(row) for row in db.execute("""
         SELECT p.* FROM papers p
         WHERE p.kind='archive' AND p.session IN ('January 2026','July 2026')
-          AND p.deleted_at IS NOT NULL
           AND NOT EXISTS (
             SELECT 1 FROM papers newer
             WHERE newer.department_id=p.department_id AND newer.campus_id=p.campus_id
@@ -36,10 +37,51 @@ def removed_current_archives(db):
     """)]
 
 
-def restore_rows(db, rows, actor, operation):
+def recovery_plan(db, backup_rows):
+    current = latest_archives(db)
+    slots = {slot(row) for row in current}
+    ids = {row[0] for row in db.execute('SELECT id FROM papers')}
+    missing = []
+    for row in backup_rows:
+        if row['kind'] != 'archive' or row['session'] not in PAST_SESSIONS or row.get('deleted_at') is not None:
+            raise RuntimeError('The backup contains an ineligible recovery record; nothing was restored.')
+        if slot(row) in slots:
+            continue
+        if row['id'] in ids:
+            raise RuntimeError('A backup paper ID belongs to a different live record. No data was changed: ' + row['id'])
+        missing.append(row)
+        slots.add(slot(row))
+        ids.add(row['id'])
+    return {'removed': [row for row in current if row.get('deleted_at') is not None],
+            'missing': missing, 'current': current}
+
+
+def backup_archives(seed):
+    if seed is None:
+        return []
+    database = seed / 'papers.db'
+    if not database.is_file():
+        raise RuntimeError('The saved recovery database is missing. Run git pull and retry; nothing was restored.')
+    with contextlib.closing(sqlite3.connect(database.as_uri() + '?mode=ro', uri=True)) as db:
+        if db.execute('PRAGMA quick_check').fetchone()[0] != 'ok':
+            raise RuntimeError('The saved recovery database failed its integrity check.')
+        return [row for row in latest_archives(db) if row.get('deleted_at') is None]
+
+
+def removed_current_archives(db):
+    columns = {row[1] for row in db.execute('PRAGMA table_info(papers)')}
+    if 'deleted_at' not in columns:
+        return []
+    return [row for row in latest_archives(db) if row.get('deleted_at') is not None]
+
+
+def restore_rows(db, rows, actor, operation, missing=()):
     eligible = {row['id'] for row in removed_current_archives(db)}
     if any(row['id'] not in eligible for row in rows):
         raise RuntimeError('The recovery plan is stale. No restoration was applied.')
+    planned_missing = recovery_plan(db, missing)['missing']
+    if len(planned_missing) != len(missing):
+        raise RuntimeError('A missing archive slot now has a live upload; no restoration was applied.')
     now = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec='milliseconds').replace('+00:00', 'Z')
     columns = {row[1] for row in db.execute('PRAGMA table_info(papers)')}
     with db:
@@ -47,20 +89,27 @@ def restore_rows(db, rows, actor, operation):
             id TEXT PRIMARY KEY,actor_id INTEGER,actor_username TEXT,actor_name TEXT,
             action TEXT NOT NULL,target_type TEXT NOT NULL,target_id TEXT NOT NULL,
             details TEXT NOT NULL,created_at TEXT NOT NULL)""")
-        for row in rows:
-            changes = 'deleted_at=NULL' + (',deleted_by=NULL' if 'deleted_by' in columns else '')
-            result = db.execute(f'UPDATE papers SET {changes} WHERE id=? AND deleted_at=?',
-                                (row['id'], row['deleted_at']))
-            if result.rowcount != 1:
-                raise RuntimeError('A recovery record changed; no restoration was applied.')
+        for row, method in [(row, 'unremove') for row in rows] + [(row, 'backup_missing_slot') for row in missing]:
+            if method == 'unremove':
+                changes = 'deleted_at=NULL' + (',deleted_by=NULL' if 'deleted_by' in columns else '')
+                result = db.execute(f'UPDATE papers SET {changes} WHERE id=? AND deleted_at=?',
+                                    (row['id'], row['deleted_at']))
+                if result.rowcount != 1:
+                    raise RuntimeError('A recovery record changed; no restoration was applied.')
+            else:
+                names = [name for name in row if name in columns and name not in ('deleted_at', 'deleted_by')]
+                fields = ','.join('"' + name.replace('"', '""') + '"' for name in names)
+                db.execute('INSERT INTO papers (' + fields + ') VALUES (' + ','.join('?' for _ in names) + ')',
+                           [row[name] for name in names])
             details = {
                 'filename': row['original_name'], 'department_id': row['department_id'],
                 'campus_id': row['campus_id'], 'session': row['session'],
                 'set': row['set_name'], 'kind': 'archive',
-                'previous_deleted_at': row['deleted_at'],
+                'previous_deleted_at': row.get('deleted_at'),
                 'previous_deleted_by': row.get('deleted_by'),
                 'reason': 'Restore accidentally removed past-session paper at administrator request',
                 'recovery_operation': operation,
+                'recovery_method': method,
             }
             db.execute('INSERT INTO audit_events VALUES (?,?,?,?,?,?,?,?,?)',
                        (str(uuid.uuid4()), None, actor, 'Cloud Shell archive recovery',
@@ -96,6 +145,7 @@ def generation(metadata):
 
 
 def recover(cloud, apply=False, seed=None):
+    saved = backup_archives(seed)
     service = json.loads(cloud.command('run', 'services', 'describe', SERVICE,
                                       '--region=' + REGION, '--format=json'))
     container = service['spec']['template']['spec']['containers'][0]
@@ -114,13 +164,22 @@ def recover(cloud, apply=False, seed=None):
         with contextlib.closing(sqlite3.connect(database.as_uri() + '?mode=ro', uri=True)) as db:
             if db.execute('PRAGMA quick_check').fetchone()[0] != 'ok':
                 raise RuntimeError('Database integrity check failed; nothing was restored.')
-            rows = removed_current_archives(db)
-        print('Removed current past-session sets:', len(rows))
-        for row in rows:
-            print(' ', 'Department', row['department_id'], '| Campus', row['campus_id'],
-                  '|', row['session'], '| Set', row['set_name'], '|', row['original_name'])
+            plan = recovery_plan(db, saved)
+            sessions = [tuple(row) for row in db.execute("SELECT session,COUNT(*) FROM papers WHERE kind='archive' GROUP BY session ORDER BY session")]
+        removed, missing = plan['removed'], plan['missing']
+        rows = removed + missing
+        print('Archive records by session (including history):', json.dumps(sessions))
+        print('Visible current January/July 2026 sets:', len(plan['current']) - len(removed))
+        print('Removed current past-session sets:', len(removed))
+        print('Latest past-session sets in recovery backup:', len(saved))
+        print('Backup sets missing from the live database:', len(missing))
+        for group, records in [('Restore removed', removed), ('Restore missing backup', missing)]:
+            for row in records:
+                print(' ', group, '| Department', row['department_id'], '| Campus', row['campus_id'],
+                      '|', row['session'], '| Set', row['set_name'], '|', row['original_name'])
         if not rows:
-            print('No removed current January/July 2026 sets need restoration.')
+            print('No removed or missing backup sets need restoration. No cloud data was changed.')
+            print('In Question papers, select All departments, All sessions and All campuses, then refresh.')
             return 0
         documents = {}
         for row in rows:
@@ -147,7 +206,7 @@ def recover(cloud, apply=False, seed=None):
         for object_uri, candidate in documents.items():
             cloud.upload(candidate, object_uri, 0)
         with contextlib.closing(sqlite3.connect(database)) as db:
-            restore_rows(db, rows, actor[0].strip(), operation)
+            restore_rows(db, removed, actor[0].strip(), operation, missing=missing)
             if db.execute('PRAGMA quick_check').fetchone()[0] != 'ok':
                 raise RuntimeError('Restored database failed validation; cloud data was not changed.')
         try:
@@ -159,9 +218,10 @@ def recover(cloud, apply=False, seed=None):
         verified = directory / 'verified.db'
         cloud.download(uri, verified)
         with contextlib.closing(sqlite3.connect(verified.as_uri() + '?mode=ro', uri=True)) as db:
+            current = {row['id']: row for row in latest_archives(db)}
             for row in rows:
-                result = db.execute('SELECT deleted_at FROM papers WHERE id=?', (row['id'],)).fetchone()
-                if not result or result[0] is not None:
+                result = current.get(row['id'])
+                if not result or result.get('deleted_at') is not None:
                     raise RuntimeError('Recovery was published but a record changed before verification. Check the portal before retrying.')
         print('Restored and verified', len(rows), 'past-session set(s).')
         print('Refresh Question papers in the portal. No deployment is needed.')
