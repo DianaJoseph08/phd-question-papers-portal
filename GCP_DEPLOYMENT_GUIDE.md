@@ -35,6 +35,20 @@ After deployment, sign in as administrator at the existing app URL. The overview
 
 The script prints recent service logs. A successful start includes `[Storage] Ready:`. If startup fails, keep the error output and resolve the reported bucket permission or missing file; do not replace the cloud database manually.
 
+## Restore accidentally removed past papers
+
+From an up-to-date checkout in Cloud Shell, run:
+
+```bash
+bash restore-removed-archives.sh --apply
+```
+
+This restores the latest removed January/July 2026 archive for each department, campus, session and set. A newer uploaded version takes precedence, including when timestamps match. Older superseded versions and January 2027 submissions are excluded. Original upload details are retained and each restoration receives a `paper.restored` admin audit entry identifying the active Cloud Shell account.
+
+The script reads the running service's bucket setting, checks the original Word files, saves a private database backup under `recovery/`, and publishes a snapshot with a generation-match precondition. If another save occurs first, it refuses to overwrite it and asks you to rerun the command. A missing Word file is recovered only when its exact stored filename exists in the repository's recovery files; otherwise recovery stops before publishing the database. Refresh the portal after the verified success message; deployment is not required. Run without `--apply` to preview the affected records without changing cloud data.
+
+Recovery tests use isolated fixtures: `python3 restore-removed-archives.test.py`.
+
 ## Limits
 
 If a generated set is missing, run `bash diagnose-generated-papers.sh` from an up-to-date checkout in Cloud Shell before attempting another repair. This read-only script reports the active revision and traffic, inspects a temporary copy of the cloud database, lists Civil Engineering's saved generation history and latest A/B records, checks whether their Word files exist, and reads generation request/error logs. It does not change the service, bucket objects or database and does not print question text or account passwords. Paste its terminal output for diagnosis. A generation button click alone does not confirm a saved paper; the success dialog must appear after the cloud commit.
