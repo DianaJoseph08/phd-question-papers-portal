@@ -1,6 +1,14 @@
 const {all,run}=require('./persistent-data');
 const {commonFor}=require('./submission-policy');
 const normalize=value=>value.trim().replace(/\s+/g,' ').toLowerCase();
+function misplacedClinicalPsychology(department){
+ const name=String(department.name||'').toLowerCase().replace(/[^a-z]/g,'').replace('psycology','psychology');
+ return name==='clinicalpsychology'&&/engineering/i.test(department.institution||'');
+}
+function misplacedClinicalGeneration(generation){
+ const [name,faculty]=String(generation.department_key||'').split('|');
+ return misplacedClinicalPsychology({name:generation.department_name||name,institution:faculty});
+}
 
 class DepartmentRegistry{
  constructor({db,base,institutions,hods}){Object.assign(this,{db,base,hods});this.institutions=institutions.map(i=>({...i,common_rm_id:commonFor({campus_id:i.campus_id,institution:i.name})}));}
@@ -14,7 +22,7 @@ class DepartmentRegistry{
    const institution=this.institutions.find(i=>i.id===d.institution_id);
    if(!institution)throw Error('The faculty for a saved department is unavailable. Contact the administrator.');
    return {...d,is_custom:true,institution:institution.name,campus_id:institution.campus_id,campus:institution.campus};
-  })].map(d=>{
+  })].filter(d=>!misplacedClinicalPsychology(d)).map(d=>{
    const hod=this.hods.find(u=>d.is_custom?u.id===d.hod_user_id:u.department_id===d.id&&u.campus_id===d.campus_id);
    const common_rm_id=commonFor(d);
    return {...d,hod_name:hod?.name||null,common_rm_id,submission_format:d.is_common?'25 RM':common_rm_id?'25 subject':'25 RM + 25 subject'};
@@ -28,6 +36,7 @@ class DepartmentRegistry{
   const institution=this.institutions.find(i=>i.id===Number(body.institution_id));
   if(!institution)throw Error('Select a valid campus faculty or institution.');
   if(body.campus_id!==undefined&&Number(body.campus_id)!==institution.campus_id)throw Error('Select a faculty belonging to the selected campus.');
+  if(misplacedClinicalPsychology({name,institution:institution.name}))throw Error('Clinical Psychology belongs under FMHS / Allied Health Sciences. Use its existing FMHS department; do not add it under Engineering and Technology.');
   if(current.some(d=>d.institution_id===institution.id&&normalize(d.name)===normalize(name))){const e=Error('This department already exists in the selected campus and faculty. Use its existing upload option.');e.status=409;throw e;}
   let hod_user_id=null;
   if(body.hod_user_id!==undefined&&body.hod_user_id!==null&&body.hod_user_id!==''){
@@ -35,9 +44,10 @@ class DepartmentRegistry{
    if(!hod)throw Error('Choose an existing HoD account from the selected campus.');
    hod_user_id=hod.id;
   }
-  const id=Math.max(999,...current.map(d=>d.id))+1;
+  const stored=(await all(this.db(),'SELECT COALESCE(MAX(id),999) AS max_id FROM custom_departments'))[0];
+  const id=Math.max(999,stored.max_id,...current.map(d=>d.id))+1;
   await run(this.db(),'INSERT INTO custom_departments (id,name,institution_id,hod_user_id,created_by) VALUES (?,?,?,?,?)',[id,name,institution.id,hod_user_id,adminId]);
   return (await this.load()).find(d=>d.id===id);
  }
 }
-module.exports={DepartmentRegistry};
+module.exports={DepartmentRegistry,misplacedClinicalPsychology,misplacedClinicalGeneration};

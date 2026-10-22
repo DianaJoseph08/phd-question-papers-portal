@@ -45,6 +45,16 @@ Suresh and Ruby can open **Departments** (also linked from **Upload papers**) an
 
 The new department appears in the archive/upload dropdowns, library filters and generation matrix. Common RM requirements follow its campus and faculty automatically. Use the same department name and faculty category across campuses to generate a shared paper; subject questions for a department present at one campus use that campus's two sets, while its matching Common RM faculty group supplies research questions across campuses. Duplicate department names within the same faculty are refused. New HoD accounts, department records and HoD assignments are stored in the question-paper database and restored from the storage bucket on restart; the original admissions accounts/database remain unchanged.
 
+Clinical Psychology is retained under FMHS / Allied Health Sciences. The incorrectly mapped Engineering entry (including the older spelling `CLINICAL PSYCOLOGY`) is excluded from active departments, uploads, tracking, the generation matrix and active generated-paper lists. It cannot be recreated under Engineering. Original admission rows, accounts and document history are retained; the copied admissions database is not edited.
+
+## Upload failures
+
+An upload error remains visible beneath the upload form with the selected filename and the server's reason. Failed submissions retain the selected file and department/session/set for correction and retry. Repeated-question rejection also provides a button to reopen the matched-question table. A confirmed save followed by a failed library refresh is labelled as saved, with instructions to refresh before resubmitting.
+
+Upload Word Document `.docx` files. An older `.doc` file must be opened in Word and saved with **File > Save As > Word Document (.docx)**; changing its extension does not convert it. Template/answer formatting remarks remain advisory for upload, and more than 10 repeated/rephrased questions still rejects a set. Word-format and other validation failures now record the account, filename, selected department/set and reason in the admin-only Activity log under **Upload failed**; repeated-question and set-selection rejections remain **Upload rejected**. Passwords and question text are not included in these upload log details.
+
+For a hosted department that is absent from the local backup, run `bash diagnose-department-uploads.sh` from the current Cloud Shell checkout. This read-only check reports Trichy Clinical Psychology/Cardiac Care department mappings, assigned HoD accounts, temporary-password requirements, saved Cardiac papers, relevant actor-linked activity and recent application messages. It does not change cloud records or print credentials/question text. General application messages may concern other departments; they do not establish which HoD encountered an error without matching account/file evidence.
+
 ## Accounts and activity log
 
 Every account holder has a **Change password** page. The username is immutable. A change requires the current password and a confirmed new password of 12–128 characters. The new password is stored as a salted scrypt hash in the question-paper database; the admissions database remains read-only. Subsequent portal logins use the changed password. A password change invalidates all other sessions, including sessions on another app instance.

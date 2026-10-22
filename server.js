@@ -2,10 +2,10 @@ const express=require('express'), multer=require('multer'), sqlite=require('sqli
 const {inspect,choose,generate}=require('./papers');
 const {screen,departmentKey}=require('./screening');
 const {commonFor,inspectForDepartment,validateTemplate,placeholder}=require('./submission-policy');
-const {setFromFilename}=require('./public/upload-set');
+const {setFromFilename,wordFileError}=require('./public/upload-set');
 const cloudStorage=require('./cloud_storage');
 const {PersistentData,portableName,open}=require('./persistent-data');
-const {DepartmentRegistry}=require('./departments');
+const {DepartmentRegistry,misplacedClinicalGeneration}=require('./departments');
 const {Accounts,validateNewPassword}=require('./accounts');
 const {Audit}=require('./audit');
 const root=__dirname, seed=process.env.QUESTION_PAPER_SEED_DIR||path.join(root,'data'), data=process.env.QUESTION_PAPER_DATA_DIR||(cloudStorage.enabled?path.join(require('os').tmpdir(),'qp-runtime'):path.join(root,'data')), parent=path.dirname(root);
@@ -98,10 +98,10 @@ get('/api/state',async(req,res)=>{
    AND newer.session=p.session AND newer.set_name=p.set_name AND newer.kind=p.kind
    AND (newer.created_at>p.created_at OR (newer.created_at=p.created_at AND newer.rowid>p.rowid))
  ) ORDER BY p.created_at DESC,p.rowid DESC`);
- const visible=rows.filter(p=>canViewPaper(req.user,departments.find(d=>d.id===p.department_id)||{})&&(admin(req.user)||p.kind==='archive'||p.uploaded_by===req.user.id||req.user.role==='coordinator'));
+ const visible=rows.filter(p=>canViewPaper(req.user,departments.find(d=>d.id===p.department_id))&&(admin(req.user)||p.kind==='archive'||p.uploaded_by===req.user.id||req.user.role==='coordinator'));
  const current=[];for(const p of visible)current.push(await currentSubmissionCounts(p));
  const submission_department_ids=departments.filter(d=>canSubmit(req.user,d)).map(d=>d.id);
- res.json({user:req.user,can_use_papers:paperAccess(req.user),can_manage_departments:canManageDepartments(req.user),can_track_submissions:canTrackSubmissions(req.user),coordinator_assignment:coordinatorAssignment(req.user),can_upload_papers:admin(req.user)||submission_department_ids.length>0,submission_department_ids,institutions:canManageDepartments(req.user)?registry.institutions:[],hod_accounts:canManageDepartments(req.user)?registry.hods:[],departments:admin(req.user)?departments:departments.filter(d=>canViewPaper(req.user,d)),papers:current.map(({path:ignored,...p})=>p),templates:paperAccess(req.user)?await all(persistence.db,'SELECT set_name,original_name,updated_at FROM templates'):[],generations:admin(req.user)?await all(persistence.db,'SELECT id,department_key,department_name,set_name,distribution,created_at FROM generations ORDER BY created_at DESC,rowid DESC'):[]});
+ res.json({user:req.user,can_use_papers:paperAccess(req.user),can_manage_departments:canManageDepartments(req.user),can_track_submissions:canTrackSubmissions(req.user),coordinator_assignment:coordinatorAssignment(req.user),can_upload_papers:admin(req.user)||submission_department_ids.length>0,submission_department_ids,institutions:canManageDepartments(req.user)?registry.institutions:[],hod_accounts:canManageDepartments(req.user)?registry.hods:[],departments:admin(req.user)?departments:departments.filter(d=>canViewPaper(req.user,d)),papers:current.map(({path:ignored,...p})=>p),templates:paperAccess(req.user)?await all(persistence.db,'SELECT set_name,original_name,updated_at FROM templates'):[],generations:admin(req.user)?(await all(persistence.db,'SELECT id,department_key,department_name,set_name,distribution,created_at FROM generations ORDER BY created_at DESC,rowid DESC')).filter(g=>!misplacedClinicalGeneration(g)):[]});
 });
 const trackingChecksCache=new Map();
 get('/api/submission-tracker',async(req,res)=>{
@@ -121,7 +121,7 @@ get('/api/submission-tracker',async(req,res)=>{
  res.json(buildTracker({user:req.user,departments:allowed,users:accounts.users,papers,screenings,checks,attempts}));
 });
 function requireAdmin(req,res,next){if(!admin(req.user))return res.status(403).json({error:'Administrator access required.'});next();}
-get('/api/generations',requireAdmin,async(req,res)=>res.json(await all(persistence.db,'SELECT id,department_key,department_name,set_name,distribution,created_at FROM generations ORDER BY created_at DESC,rowid DESC')));
+get('/api/generations',requireAdmin,async(req,res)=>res.json((await all(persistence.db,'SELECT id,department_key,department_name,set_name,distribution,created_at FROM generations ORDER BY created_at DESC,rowid DESC')).filter(g=>!misplacedClinicalGeneration(g))));
 get('/api/audit',requireAdmin,async(req,res)=>res.json(await audit.list(req.query)));
 get('/api/users',requireAdmin,async(req,res)=>res.json({users:await accounts.list(departments)}));
 post('/api/users/:id/reset-password',requireAdmin,async(req,res)=>{
@@ -177,7 +177,7 @@ async function assessSubmission(d,buffer,info,set,{forGeneration=false}={}){
  return report;
 }
 async function store(req,buffer,name){
- const d=metadata(req);if(!name.toLowerCase().endsWith('.docx'))throw Error('Only .docx Word documents are accepted.');
+ const d=metadata(req),fileError=wordFileError(name);if(fileError)throw Error(fileError);
  const filenameSet=setFromFilename(name);
  if(req.body.kind==='submission'&&filenameSet&&filenameSet!==req.body.set_name){const e=Error('This filename identifies Set '+filenameSet+', but Set '+req.body.set_name+' is selected. Select Set '+filenameSet+' and upload again. Your existing papers have not been changed.');e.status=422;e.details={expected_set:filenameSet};throw e;}
  const info=inspectForDepartment(buffer,d);let report=null;
@@ -196,7 +196,20 @@ async function store(req,buffer,name){
  }catch(e){await run('DELETE FROM papers WHERE id=?',[id]);fs.unlinkSync(file);throw e;}
  return {id,set_name:req.body.set_name,counts:info.counts,valid:info.valid,screening:report};
 }
-post('/api/papers',upload.single('file'),async(req,res)=>{if(!req.file)throw Error('Choose a Word document.');try{res.json(await store(req,req.file.buffer,req.file.originalname));}catch(e){if(e.status===422){await audit.log(req.user,'paper.rejected','upload_attempt',crypto.randomUUID(),{filename:req.file.originalname,department_id:req.body.department_id,session:req.body.session,set:req.body.set_name,reason:e.message,matched_questions:e.details?.screening?.matched_count});await persistence.commit();}throw e;}});
+post('/api/papers',upload.single('file'),async(req,res)=>{
+ try{
+  if(!req.file)throw Error('Choose a Word document (.docx) before clicking Upload paper.');
+  res.json(await store(req,req.file.buffer,req.file.originalname));
+ }catch(e){
+  const body=req.body||{},details={filename:req.file?.originalname,department_id:body.department_id,session:body.session,set:body.set_name,reason:e.message,matched_questions:e.details?.screening?.matched_count};
+  console.warn(JSON.stringify({event:'paper.upload_failed',username:req.user.username,...details}));
+  if(!e.status||e.status===400||e.status===422){
+   try{await audit.log(req.user,e.status===422?'paper.rejected':'paper.upload_failed','upload_attempt',crypto.randomUUID(),details);await persistence.commit();}
+   catch(logError){console.error('Upload failure could not be added to the activity log: '+logError.message);}
+  }
+  throw e;
+ }
+});
 post('/api/papers/:id/remove',requireAdmin,async(req,res)=>{
  const p=(await all(persistence.db,'SELECT * FROM papers WHERE id=?',[req.params.id]))[0];if(!p||p.deleted_at)return res.status(404).json({error:'Paper not found.'});
  const reason=typeof req.body.reason==='string'?req.body.reason.trim():'';if(reason.length<3||reason.length>500)throw Error('Give a removal reason between 3 and 500 characters.');
