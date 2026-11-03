@@ -1,7 +1,7 @@
 const Zip = require('pizzip');
 const {DOMParser, XMLSerializer} = require('@xmldom/xmldom');
 const crypto = require('crypto');
-const {attachAnswers,layout}=require('./answers');
+const {attachAnswers,layout,choiceInstructions}=require('./answers');
 const ns = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
 const esc = s => String(s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&apos;'}[c]));
 const parse = x => new DOMParser().parseFromString(x,'application/xml');
@@ -58,8 +58,23 @@ function inspect(buffer,{subjectName,includeAnswers=true,includeNodes=false}={})
   const cells=Array.from(cell.parentNode.childNodes).filter(n=>n.nodeName==='w:tc');
   return cells[0]===cell&&cells.length>1&&cells.slice(1).some(c=>text(c).trim()||c.getElementsByTagName('w:drawing').length||c.getElementsByTagName('w:pict').length||c.getElementsByTagName('w:object').length);
  }
- let section=null,pending=[],pendingNodes=[],questions=[],started=false,number=null,displayNumber=null;
- function flush(){if(!pending.length)return;const combined=pending.map(x=>text(parse(x))).join('\n');questions.push({section:section||'unclassified',number,display_number:displayNumber,xml:pending.join(''),text:combined,hash:crypto.createHash('sha256').update(combined.toLowerCase().replace(/[^\p{L}\p{N}]/gu,'')).digest('hex'),...(includeNodes?{paragraphs:pendingNodes}: {})});pending=[];pendingNodes=[];}
+ const matchingTables=new Set(Array.from(doc.getElementsByTagName('w:tbl')).filter(table=>{
+  const row=Array.from(table.childNodes).find(n=>n.nodeName==='w:tr'),cells=row?Array.from(row.childNodes).filter(n=>n.nodeName==='w:tc'):[];
+  return cells.some(c=>/^(?:list|column)[\s\u2010-\u2015-]*(?:i|1)\b/i.test(text(c).trim()))&&cells.some(c=>/^(?:list|column)[\s\u2010-\u2015-]*(?:ii|2)\b/i.test(text(c).trim()));
+ }));
+ let section=null,pending=[],pendingNodes=[],questions=[],started=false,number=null,displayNumber=null,matchingTable=null,matchingNumber=null;
+ function matchingListEntry(p,value){
+  if(!pending.length)return false;
+  const stem=pending.map(x=>text(parse(x))).join('\n');
+  if(!/\bmatch\s+(?:the\s+)?following\b/i.test(stem))return false;
+  for(let node=p.parentNode;node;node=node.parentNode)if(matchingTables.has(node)){matchingTable=node;return true;}
+  // An actual Word table supplies its own boundary, including if its choices
+  // are incomplete. Flattened/generated lists use their sequential item labels.
+  if(matchingTable||value!==(matchingNumber===null?1:matchingNumber+1))return false;
+  if(!/\b(?:list|column)[\s\u2010-\u2015-]*(?:i|1)\b/i.test(stem)||!/\b(?:list|column)[\s\u2010-\u2015-]*(?:ii|2)\b/i.test(stem)||choiceInstructions(stem).length||layout(pending.join('')).separateChoices)return false;
+  matchingNumber=value;return true;
+ }
+ function flush(){if(!pending.length)return;const combined=pending.map(x=>text(parse(x))).join('\n');questions.push({section:section||'unclassified',number,display_number:displayNumber,xml:pending.join(''),text:combined,hash:crypto.createHash('sha256').update(combined.toLowerCase().replace(/[^\p{L}\p{N}]/gu,'')).digest('hex'),...(includeNodes?{paragraphs:pendingNodes}: {})});pending=[];pendingNodes=[];matchingTable=null;matchingNumber=null;}
  for(const [paragraphIndex,p] of paragraphs.entries()){
   if(inSummary(p))continue;
   // Nested textbox paragraphs are visited separately, never counted twice.
@@ -103,7 +118,10 @@ function inspect(buffer,{subjectName,includeAnswers=true,includeNodes=false}={})
   }
   const automatic=['decimal','decimalZero'].includes(list?.format);
   const questionLike=/[?？]|\b[A-D][.)]\s|^(which|what|how|why|define|explain|identify|describe)\b/i.test(t);
-  const boundary=(manual||automatic)&&(section||started||questionLike||firstQuestionCell(p,t));
+  // Numbered items inside a matching List I / List II block are part of its
+  // question. The explicit Codes/answer-choice instruction ends that block.
+  const matchingEntry=(manual||automatic)&&matchingListEntry(p,manual?Number(manual[1]):listNumber);
+  const boundary=(manual||automatic)&&!matchingEntry&&(section||started||questionLike||firstQuestionCell(p,t));
   if(boundary){flush();number=manual?Number(manual[1]):null;displayNumber=number??listNumber;started=true;}
   if(!started)continue;
   if(!t&&!p.getElementsByTagName('w:drawing').length&&!p.getElementsByTagName('m:oMath').length&&!p.getElementsByTagName('w:pict').length&&!p.getElementsByTagName('w:object').length)continue;

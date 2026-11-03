@@ -82,3 +82,45 @@ test('adjacent bare option labels with equations retain all four labels and bold
  const selected=l.runs.find(r=>r.text==='xb=2');assert.equal(selected.node.getElementsByTagName('w:b')[0].getAttribute('w:val'),'1');
  assert.equal(l.doc.getElementsByTagName('w:keepNext').length,4);assert.equal(l.doc.getElementsByTagName('w:keepLines').length,5);
 });
+
+function matchingPaper({codes=true,table=true,automatic=false}={}){
+ const data=[];for(let i=1;i<=4;i++)data.push([p('ABCD'[i-1]+'. Protocol '+i),automatic?numbered('Property '+i,9,0):p(i+'. Property '+i)]);
+ const columns=[p('List-I (Protocol)'),p('List-II (Property)')];
+ const stem=table?'<w:tbl>'+[columns,...data].map(cells=>'<w:tr>'+cells.map(xml=>'<w:tc>'+xml+'</w:tc>').join('')+'</w:tr>').join('')+'</w:tbl>':[...columns,...data.flat()].join('');
+ let body=p('Research Methodology')+p('1. Match the following protocols with their properties.')+stem+(codes?p('Codes:'):'');
+ const choices=['A-3, B-2, C-1, D-4','A-1, B-3, C-4, D-2','A-3, B-1, C-2, D-4','A-4, B-1, C-3, D-2'];for(let i=0;i<4;i++)body+=p('('+'ABCD'[i]+') '+choices[i]);
+ for(let i=2;i<=25;i++)body+=question(i);
+ body+=p('Subject-Specific Questions');for(let i=26;i<=50;i++)body+=question(i);body+=p('Answer Key');for(let i=1;i<=50;i++)body+=p(i+' '+(i===1?'C':'B'));
+ return automatic?numberedDoc(body,list(9,level(0,'decimal'))):doc(body);
+}
+test('numbered matching-table entries stay in question 1 and all 50 answers use the visible question number',()=>{
+ for(const options of [{},{table:false},{codes:false},{automatic:true}]){
+  const info=inspect(matchingPaper(options));assert.deepEqual(info.counts,{research:25,subject:25});assert.deepEqual(info.questions.map(q=>q.source_number),Array.from({length:50},(_,i)=>i+1));assert.ok(info.questions.every(q=>q.answer_key_number===q.source_number&&!q.answer_error));assert.equal(info.questions[0].answer,'C');assert.ok(info.questions[0].answer_diagnostics.question_text.includes('4. Property 4')||options.automatic);
+ }
+});
+test('an incomplete matching choice list never consumes the real questions following its table',()=>{
+ const z=new Zip(matchingPaper({codes:false}));z.file('word/document.xml',z.file('word/document.xml').asText().replace('(D) A-4, B-1, C-3, D-2','Unlabelled fourth answer'));
+ const info=inspect(z.generate({type:'nodebuffer'}));assert.deepEqual(info.counts,{research:25,subject:25});assert.ok(info.questions[0].answer_error);assert.equal(info.questions[1].source_number,2);assert.equal(info.questions[1].answer_key_number,2);assert.equal(info.questions[1].answer,'B');
+});
+test('matching and statement-combination questions remain readable after template generation and exam-copy conversion',t=>{
+ const fs=require('fs'),os=require('os'),path=require('path'),{generate}=require('./papers'),{examCopy}=require('./exam-copy');
+ const directory=fs.mkdtempSync(path.join(os.tmpdir(),'qp-matching-'));t.after(()=>{assert.ok(path.resolve(directory).startsWith(path.resolve(os.tmpdir())+path.sep));fs.rmSync(directory,{recursive:true,force:true});});
+ const buffer=matchingPaper(),file=path.join(directory,'matching-source.docx');fs.writeFileSync(file,buffer);const source=inspect(buffer).questions.map(q=>({...q,source:{path:file}}));
+ const output=generate(source,'Computer Science','B',require('./test-template').templateFixture('B')),parsed=inspect(output);assert.deepEqual(parsed.counts,{research:25,subject:25});assert.equal(parsed.questions[0].answer,'C');assert.ok(parsed.questions.every(q=>q.answer&&!q.answer_error));assert.ok(parsed.questions[0].answer_diagnostics.question_text.includes('4. Property 4'));
+ const exam=inspect(examCopy(output));assert.deepEqual(exam.counts,{research:25,subject:25});assert.ok(exam.questions.every(q=>q.answer===null));assert.deepEqual(fs.readFileSync(file),buffer);
+});
+test('explicit answer instructions separate labelled statements from choices, including references inside choice text',()=>{
+ for(const label of [a=>a+'. ',a=>'('+a+') ']){
+  const statements='ABCDE'.split('').map(a=>p(label(a)+'Statement '+a)).join(''),options=['(A) and (B) Only','(A), (B) and (C) Only','(A), (B) and (D) Only','(B) and (D) Only'];
+  const q=inspect(doc(p('Research Methodology')+p('7. Which statements apply?')+statements+p('Choose the correct answer from the options given below :')+options.map((v,i)=>p('('+'ABCD'[i]+') '+v)).join('')+p('Answer Key')+p('7 D'))).questions[0];
+  assert.equal(q.answer,'D');assert.equal(q.answer_key_number,7);assert.equal(q.answer_error,null);assert.deepEqual(q.answer_diagnostics.option_counts,{A:1,B:1,C:1,D:1});assert.ok(q.answer_diagnostics.question_text.includes('Statement E'));assert.equal(q.answer_diagnostics.options[3].text,'(B) and (D) Only');
+ }
+});
+test('combination choices without an instruction line preserve the preceding statements as stem content',()=>{
+ const q=inspect(doc(p('Research Methodology')+p('23. Which combination applies?')+['A','B','C','D'].map(a=>p(a+'. Statement '+a)).join('')+['A, B and C','B, C and D','A, C and D','A, B and D'].map((v,i)=>p('('+'ABCD'[i]+') '+v)).join('')+p('Answer Key')+p('23 B'))).questions[0];
+ assert.equal(q.answer,'B');assert.equal(q.answer_error,null);assert.ok(q.answer_diagnostics.question_text.includes('Statement D'));assert.equal(q.answer_diagnostics.options.length,4);
+});
+test('a duplicate label in the actual answer block is still reported and never silently discarded',()=>{
+ const before=p('Research Methodology')+p('5. Which statement applies?')+['A','B','C','D'].map(a=>p(a+'. Statement '+a)).join('')+p('Choose the correct answer from the options given below:');
+ const q=inspect(doc(before+p('(A) first choice')+p('(A) another first choice')+p('(B) second choice')+p('(C) third choice')+p('(D) fourth choice')+p('Answer Key')+p('5 B'))).questions[0];assert.equal(q.answer,null);assert.match(q.answer_error,/A \(2 occurrences\)/);assert.deepEqual(q.answer_diagnostics.option_counts,{A:2,B:1,C:1,D:1});
+});

@@ -4,15 +4,24 @@ const parse=xml=>new DOMParser().parseFromString(xml,'application/xml');
 const serialize=n=>new XMLSerializer().serializeToString(n);
 function content(node){let result='';function visit(n){if(['w:t','m:t'].includes(n.nodeName))result+=n.textContent;else if(['w:br','w:cr'].includes(n.nodeName))result+='\n';else if(n.nodeName==='w:tab')result+='\t';else for(let c=n.firstChild;c;c=c.nextSibling)visit(c);}visit(node);return result;}
 function questionDoc(xml){return parse(`<root xmlns:w="${ns}">${xml}</root>`);}
+function choiceInstructions(text){
+ return [...text.matchAll(/(?:^|\n)[ \t]*(?:codes?\s*[:：]|(?:choose|select)\s+(?:the\s+)?correct\s+(?:answer|option)\s+from\s+(?:the\s+)?options?\s+given\s+below[ \t]*[:：]?[ \t]*)/gi)];
+}
 function layout(xml){
  const doc=questionDoc(xml),runs=[],parts=[];let position=0;
  for(const p of Array.from(doc.getElementsByTagName('w:p'))){
   function visit(n){if(['w:r','m:r'].includes(n.nodeName)){const value=content(n);runs.push({node:n,start:position,end:position+value.length,text:value});parts.push(value);position+=value.length;}else for(let c=n.firstChild;c;c=c.nextSibling)visit(c);}visit(p);
   parts.push('\n');position++;
  }
- const text=parts.join('');let matches=[...text.matchAll(/(?:^|(?<=\s))(?:\(([A-Da-d])\)[.:]?|([A-Da-d])[ \t]*[.):：\-–—])[ \t]*/g)];
+ const text=parts.join('');let separateChoices=false,matches=[...text.matchAll(/(?:^|(?<=\s))(?:\(([A-Da-d])\)[.:]?|([A-Da-d])[ \t]*[.):：\-–—])[ \t]*/g)];
  const complete=ms=>['A','B','C','D'].every(label=>ms.some(m=>(m[1]||m[2]).toUpperCase()===label));
  const atLineStart=m=>!text.slice(text.lastIndexOf('\n',m.index-1)+1,m.index).trim();
+ // Statements and matching-column entries can also be labelled A–E. When the
+ // source explicitly introduces the answer choices, only that later list counts.
+ for(const instruction of choiceInstructions(text).reverse()){
+  const tail=matches.filter(m=>m.index>=instruction.index+instruction[0].length);
+  if(complete(tail)){matches=tail;separateChoices=true;break;}
+ }
  const lines=matches.filter(atLineStart);
  // References such as (A) and (B) in a stem/formula are not option labels.
  // Prefer the explicit option paragraphs, retaining duplicates so genuine ambiguity is reported.
@@ -25,11 +34,18 @@ function layout(xml){
  // Matching-column entries A–D belong to the stem when a separate A–D list
  // explicitly supplies the four numbered pairings below them.
  if(/\bmatch\s+(?:the\s+)?following\b/i.test(text)&&matches.length===8&&matches.map(m=>(m[1]||m[2]).toUpperCase()).join('')==='ABCDABCD'){
-  const tail=matches.slice(-4),pairings=tail.every((m,i)=>/^(?:\d+[ \t]*[-–—=:][ \t]*[a-d][; ,\t\n]*){2,}$/i.test(text.slice(m.index+m[0].length,tail[i+1]?.index??text.length).trim()));
-  if(pairings)matches=tail;
+  const tail=matches.slice(-4),pairings=tail.every((m,i)=>/^(?:(?:\d+[ \t]*[-–—=:][ \t]*[a-d]|[a-d][ \t]*[-–—=:][ \t]*\d+)[; ,\t\n]*){2,}$/i.test(text.slice(m.index+m[0].length,tail[i+1]?.index??text.length).trim()));
+  if(pairings){matches=tail;separateChoices=true;}
+ }
+ // Some statement-combination questions omit an instruction line. Distinguish
+ // their final reference-only choices from the preceding statement list while
+ // retaining genuine duplicate answer labels for review.
+ if(matches.length===8&&matches.map(m=>(m[1]||m[2]).toUpperCase()).join('')==='ABCDABCD'){
+  const tail=matches.slice(-4),combinations=tail.every((m,i)=>/^(?:\(?[A-E]\)?(?:\s*[,;&+]\s*|\s+(?:and|or)\s+))+\(?[A-E]\)?(?:\s+only)?[.\s]*$/i.test(text.slice(m.index+m[0].length,tail[i+1]?.index??text.length).trim()));
+  if(combinations){matches=tail;separateChoices=true;}
  }
  const options=matches.map((m,i)=>({label:(m[1]||m[2]).toUpperCase(),start:m.index,body:m.index+m[0].length,end:matches[i+1]?matches[i+1].index:text.length}));
- return {doc,text,runs,options};
+ return {doc,text,runs,options,separateChoices};
 }
 function boldValue(r){const b=r.getElementsByTagName('w:rPr')[0]?.getElementsByTagName('w:b')[0];return Boolean(b&&!['0','false','off'].includes(b.getAttribute('w:val')));}
 function boldOptions(l){
@@ -142,4 +158,4 @@ function markedQuestion(xml,answer,number=null){
  return Array.from(l.doc.documentElement.childNodes).map(serialize).join('');
 }
 function answerRemark(q,index=0){return {question:q.source_number??q.number??q.display_number??index+1,section:q.section,remark:q.answer_error||'Correct answer missing.',...q.answer_diagnostics};}
-module.exports={attachAnswers,markedQuestion,layout,answerRemark};
+module.exports={attachAnswers,markedQuestion,layout,answerRemark,choiceInstructions};
