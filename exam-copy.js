@@ -2,6 +2,7 @@ const Zip=require('pizzip');
 const {XMLSerializer}=require('@xmldom/xmldom');
 const {inspect,text,isAnswerKeyHeading}=require('./papers');
 const {layout}=require('./answers');
+const {hasKeyTableLabels}=require('./localized-headings');
 const W='http://schemas.openxmlformats.org/wordprocessingml/2006/main';
 const children=n=>Array.from(n.childNodes).filter(c=>c.nodeType===1);
 function normalOption(run){
@@ -60,7 +61,7 @@ function examCopy(buffer,{subjectName}={}){
  while(key.parentNode!==body&&key.parentNode)key=key.parentNode;
  const blocks=children(body),keyIndex=blocks.indexOf(key);
  if(keyIndex<0)throw Error('The answer-key section has an unsupported layout.');
- const keyTables=blocks.map((n,i)=>({n,i})).filter(({n,i})=>i>keyIndex&&n.nodeName==='w:tbl'&&/question\s*(?:no\.?|number)/i.test(text(n))&&/correct\s*(?:option|answer)/i.test(text(n)));
+ const keyTables=blocks.map((n,i)=>({n,i})).filter(({n,i})=>i>keyIndex&&n.nodeName==='w:tbl'&&hasKeyTableLabels(text(n)));
  // Current templates use a key table; older generated papers may use paragraphs.
  const end=keyTables.length?keyTables.at(-1).i:blocks.length-1;
  for(const node of blocks.slice(keyIndex,end+1))if(node.nodeName!=='w:sectPr')body.removeChild(node);

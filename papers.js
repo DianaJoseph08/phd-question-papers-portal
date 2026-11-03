@@ -2,12 +2,14 @@ const Zip = require('pizzip');
 const {DOMParser, XMLSerializer} = require('@xmldom/xmldom');
 const crypto = require('crypto');
 const {attachAnswers,layout,choiceInstructions}=require('./answers');
+const {tamilSectionHeading,tamilKeyHeading}=require('./localized-headings');
+const {questionHash}=require('./question-hash');
 const ns = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
 const esc = s => String(s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&apos;'}[c]));
 const parse = x => new DOMParser().parseFromString(x,'application/xml');
 const serialize = n => new XMLSerializer().serializeToString(n);
 function text(n) {let result='';function visit(node){if(['w:t','m:t'].includes(node.nodeName))result+=node.textContent;else if(['w:br','w:cr'].includes(node.nodeName))result+='\n';else if(node.nodeName==='w:tab')result+='\t';else for(let child=node.firstChild;child;child=child.nextSibling)visit(child);}visit(n);return result;}
-const isAnswerKeyHeading=t=>t.length<100&&(/answer\s*key\s*$/i.test(t)||/^answer\s*key\b/i.test(t));
+const isAnswerKeyHeading=t=>t.length<100&&(/answer\s*key\s*$/i.test(t)||/^answer\s*key\b/i.test(t)||tamilKeyHeading(t).heading);
 function inspect(buffer,{subjectName,includeAnswers=true,includeNodes=false}={}) {
  const zip=new Zip(buffer); const entry=zip.file('word/document.xml');
  if(!entry) throw Error('Upload a valid Word .docx document.');
@@ -38,6 +40,7 @@ function inspect(buffer,{subjectName,includeAnswers=true,includeNodes=false}={})
  }
  const format=p=>listInfo(p)?.format;
  const heading=t=>{
+  const localized=tamilSectionHeading(t);if(localized)return localized;
   if(/^(?:(?:part|section)\s*[a1][.:) –—-]*\s*)?research\s+methodology\b/i.test(t))return 'research';
   if(/^(?:(?:part|section)\s*[b2][.:) –—-]*\s*)?subject[\s\u2010-\u2015\u2212-]+specific(?:\s+(?:questions|core\s+topics))?(?=\s*(?:$|\(|[0-9]))/i.test(t))return 'subject';
   // Department-specific Section B headings (for example “Section B: Mathematics”).
@@ -74,7 +77,7 @@ function inspect(buffer,{subjectName,includeAnswers=true,includeNodes=false}={})
   if(!/\b(?:list|column)[\s\u2010-\u2015-]*(?:i|1)\b/i.test(stem)||!/\b(?:list|column)[\s\u2010-\u2015-]*(?:ii|2)\b/i.test(stem)||choiceInstructions(stem).length||layout(pending.join('')).separateChoices)return false;
   matchingNumber=value;return true;
  }
- function flush(){if(!pending.length)return;const combined=pending.map(x=>text(parse(x))).join('\n');questions.push({section:section||'unclassified',number,display_number:displayNumber,xml:pending.join(''),text:combined,hash:crypto.createHash('sha256').update(combined.toLowerCase().replace(/[^\p{L}\p{N}]/gu,'')).digest('hex'),...(includeNodes?{paragraphs:pendingNodes}: {})});pending=[];pendingNodes=[];matchingTable=null;matchingNumber=null;}
+ function flush(){if(!pending.length)return;const combined=pending.map(x=>text(parse(x))).join('\n');questions.push({section:section||'unclassified',number,display_number:displayNumber,xml:pending.join(''),text:combined,hash:questionHash(combined),...(includeNodes?{paragraphs:pendingNodes}: {})});pending=[];pendingNodes=[];matchingTable=null;matchingNumber=null;}
  for(const [paragraphIndex,p] of paragraphs.entries()){
   if(inSummary(p))continue;
   // Nested textbox paragraphs are visited separately, never counted twice.

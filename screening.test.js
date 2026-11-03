@@ -30,3 +30,15 @@ test('Trichy-only subject departments still use the shared FET RM campuses and f
  for(const set of ['A','B']){const single=choose([...rm,...['A','B'].map(s=>pool(2,'subject',s))],true,set,false,{research:[1,2],subject:[2]});assert.equal(single.filter(q=>q.section==='subject'&&q.source.campus===2).length,25);assert.equal(single.filter(q=>q.section==='research'&&q.source.campus===1).length,set==='A'?13:12);
  const both=choose([...rm,...[1,2].flatMap(c=>['A','B'].map(s=>pool(c,'subject',s)))],false,set,false,{research:[1,2],subject:[1,2]});assert.equal(both.filter(q=>q.source.campus===1).length,25);assert.equal(both.filter(q=>q.source.campus===2).length,25);}
 });
+test('Tamil vowel marks distinguish different stems while canonically equivalent Tamil remains identical',()=>{
+ const {questionHash}=require('./question-hash');assert.equal(similarity('1. நீர் A) One B) Two C) Three D) Four','2. நார் A) One B) Two C) Three D) Four').score,0);assert.notEqual(questionHash('நீர்'),questionHash('நார்'));
+ const composed='கொடி',decomposed=composed.normalize('NFD');assert.equal(similarity(composed,decomposed).score,1);assert.equal(questionHash(composed),questionHash(decomposed));
+});
+test('Tamil questions retain the same 10/11 repetition threshold without a language exemption',()=>{
+ const questions=Array.from({length:11},(_,i)=>({text:`${i+1}. ஆய்வு மாதிரி எண் ${i+1} எது? A) ஒன்று B) இரண்டு C) மூன்று D) நான்கு`})),archives=[{questions}];for(const n of [10,11]){const r=screen(questions.slice(0,n),archives,'B');assert.equal(r.matched_count,n);assert.equal(r.rejected,n>10);}
+});
+test('older final records keep their source questions excluded after Unicode hash corrections',()=>{
+ const {questionHash,generationHashes}=require('./question-hash'),crypto=require('crypto');
+ const pools=['A','B'].map(set_name=>({campus:1,set_name,questions:['research','subject'].flatMap(section=>Array.from({length:25},(_,i)=>{const text=`${set_name} ${section} ஆய்வு மாதிரி ${i} A) ஒன்று B) இரண்டு C) மூன்று D) நான்கு`;return {section,text,hash:questionHash(text)};}))})),a=choose(pools,true,'A');
+ const legacy=a.map(q=>({text:q.text,hash:crypto.createHash('sha256').update(q.text.toLowerCase().replace(/[^\p{L}\p{N}]/gu,'')).digest('hex')})),excluded=generationHashes(legacy);assert.ok(a.every(q=>excluded.has(q.hash)));const b=choose(pools.map(p=>({...p,questions:p.questions.filter(q=>!excluded.has(q.hash))})),true,'B');assert.equal(b.length,50);assert.ok(b.every(q=>!excluded.has(q.hash)));assert.ok(generationHashes([{hash:'legacy-without-text'}]).has('legacy-without-text'));
+});

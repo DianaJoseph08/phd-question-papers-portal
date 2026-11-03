@@ -1,4 +1,5 @@
 const {DOMParser,XMLSerializer}=require('@xmldom/xmldom');
+const {tamilSectionHeading,tamilKeyHeading}=require('./localized-headings');
 const ns='http://schemas.openxmlformats.org/wordprocessingml/2006/main';
 const parse=xml=>new DOMParser().parseFromString(xml,'application/xml');
 const serialize=n=>new XMLSerializer().serializeToString(n);
@@ -55,7 +56,7 @@ function boldOptions(l){
  });
  return candidates.map(o=>o.label);
 }
-const scopeFor=s=>/research\s+methodology|section\s*a\b/i.test(s)?'research':/subject|section\s*b\b/i.test(s)?'subject':null;
+const scopeFor=s=>tamilSectionHeading(s)||tamilKeyHeading(s).scope||(/research\s+methodology|section\s*a\b/i.test(s)?'research':/subject|section\s*b\b/i.test(s)?'subject':null);
 function attachAnswers(doc,questions,isHeading){
  const keys=new Map(),rawKeys=new Map();let inKey=false,scope='global';
  function record(number,value){

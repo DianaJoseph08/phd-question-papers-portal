@@ -1,6 +1,7 @@
 const Zip=require('pizzip'),{DOMParser,XMLSerializer}=require('@xmldom/xmldom');
 const {layout,markedQuestion}=require('./answers');
 const {createAssetImporter}=require('./word-assets');
+const {tamilSectionHeading,tamilKeyHeading,hasKeyTableLabels}=require('./localized-headings');
 const W='http://schemas.openxmlformats.org/wordprocessingml/2006/main',R='http://schemas.openxmlformats.org/package/2006/relationships';
 const parse=xml=>new DOMParser().parseFromString(xml,'application/xml'),xml=n=>new XMLSerializer().serializeToString(n);
 const children=n=>Array.from(n.childNodes).filter(c=>c.nodeType===1),direct=(n,tag)=>children(n).find(c=>c.nodeName===tag);
@@ -27,9 +28,9 @@ function role(p,zip,doc){
 function templateParts(buffer){
  const zip=new Zip(buffer),entry=zip.file('word/document.xml');if(!entry)throw Error('The administrator template is not a valid Word document.');
  const doc=parse(entry.asText()),body=doc.getElementsByTagName('w:body')[0];if(!body)throw Error('The administrator template has no document body.');
- const nodes=children(body),rm=nodes.findIndex(n=>n.nodeName==='w:p'&&/^(?:(?:section|part)\s*a[:.)\s-]*)?research\s+methodology\b/i.test(visible(n).trim()));
- const subject=nodes.findIndex((n,i)=>i>rm&&n.nodeName==='w:p'&&/^(?:subject[\s\u2010-\u2015\u2212-]+specific|(?:section|part)\s*b[:.)\s-])/i.test(visible(n).trim()));
- const key=nodes.findIndex((n,i)=>i>subject&&/answer\s*key/i.test(visible(n))&&visible(n).trim().length<100);
+ const nodes=children(body),rm=nodes.findIndex(n=>n.nodeName==='w:p'&&(/^(?:(?:section|part)\s*a[:.)\s-]*)?research\s+methodology\b/i.test(visible(n).trim())||tamilSectionHeading(visible(n))==='research'));
+ const subject=nodes.findIndex((n,i)=>i>rm&&n.nodeName==='w:p'&&(/^(?:subject[\s\u2010-\u2015\u2212-]+specific|(?:section|part)\s*b[:.)\s-])/i.test(visible(n).trim())||tamilSectionHeading(visible(n))==='subject'));
+ const key=nodes.findIndex((n,i)=>i>subject&&(/answer\s*key/i.test(visible(n))||tamilKeyHeading(visible(n)).heading)&&visible(n).trim().length<100);
  if(rm<0||subject<=rm||key<=subject)throw Error('The administrator template needs Research Methodology, Subject-Specific Questions and Answer Key headings in that order.');
  function slots(start,end){
   let first=nodes.findIndex((n,i)=>i>start&&i<end&&n.nodeName==='w:p'&&(/question\s+starts?\s+here/i.test(visible(n))||n.getElementsByTagName('w:numPr').length||/^\d+[.)]/.test(visible(n).trim())));
@@ -37,7 +38,7 @@ function templateParts(buffer){
   const question=nodes[first]?.nodeName==='w:p'?nodes[first]:nodes[start],option=nodes.slice(first+1,end).find(n=>n.nodeName==='w:p'&&/option\s*a|^\(?a[.)]/i.test(visible(n).trim()))||question;
   return {start:first,end,question:role(question,zip,doc),option:role(option,zip,doc)};
  }
- const keyTable=nodes.slice(key+1).find(n=>n.nodeName==='w:tbl'&&/question\s*(?:no\.?|number)/i.test(visible(n))&&/correct\s*(?:option|answer)/i.test(visible(n)));
+ const keyTable=nodes.slice(key+1).find(n=>n.nodeName==='w:tbl'&&hasKeyTableLabels(visible(n)));
  const rows=keyTable&&children(keyTable).filter(n=>n.nodeName==='w:tr'),columns=rows?.[0]&&children(rows[0]).filter(n=>n.nodeName==='w:tc').length;
  if(!keyTable||!rows[1]||![2,4].includes(columns))throw Error('The administrator template needs a 2-column or 4-column Question No. / Correct Option answer-key table with a sample row.');
  return {zip,doc,body,nodes,rm,subject,key,keyTable,rows,columns,researchSlot:slots(rm,subject),subjectSlot:slots(subject,key)};
