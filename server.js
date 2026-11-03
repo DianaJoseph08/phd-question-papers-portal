@@ -296,7 +296,13 @@ get('/api/generations/:id/:action',requireAdmin,async(req,res)=>{
   if(req.params.action==='manifest'){res.vary('Accept');return res.json(record);}
   res.attachment('January-2027-'+g.department_name.replace(/[^a-z0-9]/gi,'-')+'-Set-'+g.set_name+'-Source-Record.csv');res.type('text/csv');return res.send(require('./source-record').sourceCsv(record));
  }
- if(req.params.action!=='download')return res.status(404).end();const localPath=await ensureFileLocal(g.path);res.download(localPath,`January-2027-${g.department_name.replace(/[^a-z0-9]/gi,'-')}-Set-${g.set_name}.docx`);
+ if(!['download','exam-copy'].includes(req.params.action))return res.status(404).end();
+ const localPath=await ensureFileLocal(g.path),name=`January-2027-${g.department_name.replace(/[^a-z0-9]/gi,'-')}-Set-${g.set_name}`;
+ if(req.params.action==='exam-copy'){
+  const buffer=require('./exam-copy').examCopy(fs.readFileSync(localPath),{subjectName:g.department_name});
+  res.attachment(name+'-Exam-Copy.docx');res.type('application/vnd.openxmlformats-officedocument.wordprocessingml.document');return res.send(buffer);
+ }
+ res.download(localPath,name+'.docx');
 });
 app.use(express.static(path.join(root,'public')));
 app.use((err,req,res,next)=>{console.error(err.message);res.status(err.status||400).json({...err.details,error:err.code==='LIMIT_FILE_SIZE'?'Maximum upload size is 20 MB.':err.message||'Request failed.'});});

@@ -8,7 +8,7 @@ const parse = x => new DOMParser().parseFromString(x,'application/xml');
 const serialize = n => new XMLSerializer().serializeToString(n);
 function text(n) {let result='';function visit(node){if(['w:t','m:t'].includes(node.nodeName))result+=node.textContent;else if(['w:br','w:cr'].includes(node.nodeName))result+='\n';else if(node.nodeName==='w:tab')result+='\t';else for(let child=node.firstChild;child;child=child.nextSibling)visit(child);}visit(n);return result;}
 const isAnswerKeyHeading=t=>t.length<100&&(/answer\s*key\s*$/i.test(t)||/^answer\s*key\b/i.test(t));
-function inspect(buffer,{subjectName,includeAnswers=true}={}) {
+function inspect(buffer,{subjectName,includeAnswers=true,includeNodes=false}={}) {
  const zip=new Zip(buffer); const entry=zip.file('word/document.xml');
  if(!entry) throw Error('Upload a valid Word .docx document.');
  if(entry.asText().length>15000000) throw Error('Document is too large to process.');
@@ -58,8 +58,8 @@ function inspect(buffer,{subjectName,includeAnswers=true}={}) {
   const cells=Array.from(cell.parentNode.childNodes).filter(n=>n.nodeName==='w:tc');
   return cells[0]===cell&&cells.length>1&&cells.slice(1).some(c=>text(c).trim()||c.getElementsByTagName('w:drawing').length||c.getElementsByTagName('w:pict').length);
  }
- let section=null,pending=[],questions=[],started=false,number=null,displayNumber=null;
- function flush(){if(!pending.length)return;const combined=pending.map(x=>text(parse(x))).join('\n');questions.push({section:section||'unclassified',number,display_number:displayNumber,xml:pending.join(''),text:combined,hash:crypto.createHash('sha256').update(combined.toLowerCase().replace(/[^\p{L}\p{N}]/gu,'')).digest('hex')});pending=[];}
+ let section=null,pending=[],pendingNodes=[],questions=[],started=false,number=null,displayNumber=null;
+ function flush(){if(!pending.length)return;const combined=pending.map(x=>text(parse(x))).join('\n');questions.push({section:section||'unclassified',number,display_number:displayNumber,xml:pending.join(''),text:combined,hash:crypto.createHash('sha256').update(combined.toLowerCase().replace(/[^\p{L}\p{N}]/gu,'')).digest('hex'),...(includeNodes?{paragraphs:pendingNodes}: {})});pending=[];pendingNodes=[];}
  for(const [paragraphIndex,p] of paragraphs.entries()){
   if(inSummary(p))continue;
   // Nested textbox paragraphs are visited separately, never counted twice.
@@ -114,14 +114,14 @@ function inspect(buffer,{subjectName,includeAnswers=true}={}) {
    tNode.setAttribute('xml:space','preserve');tNode.appendChild(doc.createTextNode(label));r.appendChild(tNode);
    const pPr=cloned.getElementsByTagName('w:pPr')[0];cloned.insertBefore(r,pPr?pPr.nextSibling:cloned.firstChild);xml=serialize(cloned);
   }
-  pending.push(xml);
+  pending.push(xml);if(includeNodes)pendingNodes.push(p);
  }
  flush();
  if(includeAnswers)attachAnswers(doc,questions,isAnswerKeyHeading);
  const counts={research:questions.filter(q=>q.section==='research').length,subject:questions.filter(q=>q.section==='subject').length};
  const unclassified=questions.filter(q=>q.section==='unclassified').length;if(unclassified)counts.unclassified=unclassified;
  const placeholders=questions.some(q=>/\b(?:the\s+)?question\s+starts?\s+here\b/i.test(q.text));
- return {questions,counts,valid:counts.research===25&&counts.subject===25&&!unclassified&&!placeholders,method:'question-numbering'};
+ return {questions,counts,valid:counts.research===25&&counts.subject===25&&!unclassified&&!placeholders,method:'question-numbering',...(includeNodes?{document:doc}: {})};
 }
 
 function choose(pools, single=false, finalSet='A',common=false,sectionCampuses=null) {
