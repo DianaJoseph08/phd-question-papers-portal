@@ -1,7 +1,7 @@
 const express=require('express'), multer=require('multer'), sqlite=require('sqlite3'), fs=require('fs'), path=require('path'), crypto=require('crypto');
 const {inspect,choose,generate}=require('./papers');
 const {screen,departmentKey}=require('./screening');
-const {commonFor,inspectForDepartment,validateTemplate,placeholder}=require('./submission-policy');
+const {commonFor,inspectForDepartment,validateTemplate,placeholder,placeholderRemark}=require('./submission-policy');
 const {setFromFilename,wordFileError}=require('./public/upload-set');
 const cloudStorage=require('./cloud_storage');
 const {PersistentData,portableName,open}=require('./persistent-data');
@@ -253,11 +253,11 @@ post('/api/generate',requireAdmin,async(req,res)=>{
   const expected=d.is_common?'25 RM':d.common_rm_id?'25 subject':'25 RM + 25 subject';
   const usable=d.is_common?counts.research===25:d.common_rm_id?counts.subject===25:info.valid;
   const issues=[];
-  if(!usable)issues.push({filename:p.original_name,campus:d.campus,department:d.name,set:sourceSet,question:'—',remark:`Need ${expected}. Read ${counts.research} RM / ${counts.subject} subject. Check the source numbering and section headings.`});
-  issues.push(...questions.filter(q=>q.answer_error||!q.answer||placeholder(q)).map(q=>({filename:p.original_name,campus:d.campus,department:d.name,set:sourceSet,...require('./answers').answerRemark(q,questions.indexOf(q)),...(placeholder(q)?{remark:'Replace this unused question placeholder.'}:{})})));
+  if(!usable)issues.push({filename:p.original_name,campus:d.campus,department:d.name,set:sourceSet,question:'—',remark:`Need ${expected}. Read ${info.counts.research} RM / ${info.counts.subject} subject${info.counts.unclassified?' / '+info.counts.unclassified+' questions with an unrecognized section':''}. Check the source numbering and section headings.`});
+  issues.push(...questions.filter(q=>q.answer_error||!q.answer||placeholder(q)).map(q=>({filename:p.original_name,campus:d.campus,department:d.name,set:sourceSet,...require('./answers').answerRemark(q,questions.indexOf(q)),...(placeholder(q)?{remark:placeholderRemark(q)}:{})})));
   if(issues.length){const e=Error('Correct these source questions or answers before generating the final paper.');e.status=422;e.details={generation_issues:issues};throw e;}
   await run('UPDATE papers SET counts=?,valid=? WHERE id=?',[JSON.stringify(info.counts),info.valid?1:0,p.id]);
-  const pool={...p,path:localPath,campus:p.campus_id,paper_type:d.common_rm_id?'subject_only':info.paper_type,questions};checked.set(key,pool);return pool;
+  const pool={...p,path:localPath,campus:p.campus_id,campus_name:d.campus,department_name:d.name,paper_type:d.common_rm_id?'subject_only':info.paper_type,questions};checked.set(key,pool);return pool;
  }
  const pools=[],sharedCommon=require('./public/common-rm').commonRmSources(departments,matches);
  if(sharedCommon.missing.length)throw Error('Common RM assignment is missing for '+sharedCommon.missing.join(', ')+'.');

@@ -1,5 +1,6 @@
-const Zip=require('pizzip'),fs=require('fs'),{DOMParser,XMLSerializer}=require('@xmldom/xmldom');
+const Zip=require('pizzip'),{DOMParser,XMLSerializer}=require('@xmldom/xmldom');
 const {layout,markedQuestion}=require('./answers');
+const {createAssetImporter}=require('./word-assets');
 const W='http://schemas.openxmlformats.org/wordprocessingml/2006/main',R='http://schemas.openxmlformats.org/package/2006/relationships';
 const parse=xml=>new DOMParser().parseFromString(xml,'application/xml'),xml=n=>new XMLSerializer().serializeToString(n);
 const children=n=>Array.from(n.childNodes).filter(c=>c.nodeType===1),direct=(n,tag)=>children(n).find(c=>c.nodeName===tag);
@@ -27,7 +28,7 @@ function templateParts(buffer){
  const zip=new Zip(buffer),entry=zip.file('word/document.xml');if(!entry)throw Error('The administrator template is not a valid Word document.');
  const doc=parse(entry.asText()),body=doc.getElementsByTagName('w:body')[0];if(!body)throw Error('The administrator template has no document body.');
  const nodes=children(body),rm=nodes.findIndex(n=>n.nodeName==='w:p'&&/^(?:(?:section|part)\s*a[:.)\s-]*)?research\s+methodology\b/i.test(visible(n).trim()));
- const subject=nodes.findIndex((n,i)=>i>rm&&n.nodeName==='w:p'&&/^(?:subject[ -]specific|(?:section|part)\s*b[:.)\s-])/i.test(visible(n).trim()));
+ const subject=nodes.findIndex((n,i)=>i>rm&&n.nodeName==='w:p'&&/^(?:subject[\s\u2010-\u2015\u2212-]+specific|(?:section|part)\s*b[:.)\s-])/i.test(visible(n).trim()));
  const key=nodes.findIndex((n,i)=>i>subject&&/answer\s*key/i.test(visible(n))&&visible(n).trim().length<100);
  if(rm<0||subject<=rm||key<=subject)throw Error('The administrator template needs Research Methodology, Subject-Specific Questions and Answer Key headings in that order.');
  function slots(start,end){
@@ -57,7 +58,7 @@ function segment(l,start,end){
    position=stop;
   }
  }
- const paragraphs=children(clone.documentElement).filter(p=>visible(p).trim()||p.getElementsByTagName('w:drawing').length||p.getElementsByTagName('w:pict').length);
+ const paragraphs=children(clone.documentElement).filter(p=>visible(p).trim()||p.getElementsByTagName('w:drawing').length||p.getElementsByTagName('w:pict').length||p.getElementsByTagName('w:object').length);
  // Source option separators must not turn into extra blank lines after the
  // template supplies one paragraph per option. Keep equations and images intact.
  for(const p of paragraphs){const leaves=[];function ink(n){if(['w:t','m:t','w:br','w:cr','w:tab','w:drawing','w:pict','w:sym'].includes(n.nodeName))leaves.push(n);else for(let c=n.firstChild;c;c=c.nextSibling)ink(c);}ink(p);
@@ -97,42 +98,43 @@ function replaceText(p,pattern,value){
   }
  }
 }
+function pictureOptionBlock(l){
+ if(!l.options.every(o=>!l.text.slice(o.body,o.end).trim()))return false;
+ let pictures=0;
+ function count(node){if(['w:drawing','w:pict','w:object'].includes(node.nodeName)){pictures++;return;}for(const child of children(node))count(child);}
+ children(l.doc.documentElement).forEach(count);
+ // Floating diagram choices can be anchored in the stem or before their labels.
+ // Keep the complete question layout, rather than guessing image/option pairs.
+ return pictures>=4;
+}
 function generateFromTemplate(selected,title,set,templateBuffer,{facultyName=''}={}){
  if(!templateBuffer)throw Error('Upload the administrator Set '+set+' Word template before generation.');
  const t=templateParts(templateBuffer),{zip,doc,body}=t;
  if(selected.some(q=>!q.answer||q.answer_error))throw Error('Every selected question needs an unambiguous source answer.');
  const relDoc=parse(zip.file('word/_rels/document.xml.rels')?.asText()||`<Relationships xmlns="${R}"/>`),types=parse(zip.file('[Content_Types].xml')?.asText()||'<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>');
- const usedIds=new Set(Array.from(relDoc.getElementsByTagName('Relationship')).map(n=>n.getAttribute('Id')));let serial=0;
- let drawingId=Math.max(0,...Array.from(doc.getElementsByTagName('wp:docPr')).map(n=>Number(n.getAttribute('id'))||0));
- function importAssets(nodes,sourcePath){
-  const source=new Zip(fs.readFileSync(sourcePath)),sourceDoc=parse(source.file('word/document.xml').asText());
-  for(const attr of Array.from(sourceDoc.documentElement.attributes))if(attr.name.startsWith('xmlns:')&&!doc.documentElement.hasAttribute(attr.name))doc.documentElement.setAttribute(attr.name,attr.value);
-  const sourceRels=source.file('word/_rels/document.xml.rels'),rels=sourceRels?Array.from(parse(sourceRels.asText()).getElementsByTagName('Relationship')):[],mapped=new Map();
-  function walk(n){if(n.nodeType===1){
-   if(n.nodeName==='wp:docPr')n.setAttribute('id',String(++drawingId));
-   for(const attr of Array.from(n.attributes))if(['r:embed','r:id','r:link'].includes(attr.name)){
-    const id=attr.value;if(!mapped.has(id)){
-     const rel=rels.find(n=>n.getAttribute('Id')===id),target=rel?.getAttribute('Target');
-     if(!rel||rel.getAttribute('TargetMode')==='External'||!target?.startsWith('media/'))throw Error('Source questions must use embedded inline images and Word equations.');
-     const image=source.file('word/'+target);if(!image)throw Error('A source question image is missing.');
-     let newId;do{newId='qpGenerated'+(++serial);}while(usedIds.has(newId));usedIds.add(newId);
-     const dest='media/'+newId+'-'+target.split('/').pop();zip.file('word/'+dest,image.asUint8Array());
-     const added=relDoc.createElementNS(R,'Relationship');added.setAttribute('Id',newId);added.setAttribute('Type',rel.getAttribute('Type'));added.setAttribute('Target',dest);relDoc.documentElement.appendChild(added);mapped.set(id,newId);
-     const extension=dest.split('.').pop().toLowerCase();if(!Array.from(types.getElementsByTagName('Default')).some(n=>n.getAttribute('Extension').toLowerCase()===extension)){
-      const sourceTypes=parse(source.file('[Content_Types].xml')?.asText()||'<Types/>'),type=Array.from(sourceTypes.getElementsByTagName('Default')).find(n=>n.getAttribute('Extension').toLowerCase()===extension)?.getAttribute('ContentType');
-      if(!type)throw Error('The source image content type is missing.');const addedType=types.createElementNS(types.documentElement.namespaceURI,'Default');addedType.setAttribute('Extension',extension);addedType.setAttribute('ContentType',type);types.documentElement.appendChild(addedType);
-     }
-    }n.setAttribute(attr.name,mapped.get(id));
-   }
-  }for(let c=n.firstChild;c;c=c.nextSibling)walk(c);}nodes.forEach(walk);
- }
+ const importAssets=createAssetImporter({zip,doc,relDoc,types});
  function questionNodes(q,index,slot){
-  const l=layout(markedQuestion(q.xml,q.answer,q.number));if(l.options.length!==4)throw Error('A selected question has ambiguous options.');
-  const groups=[{start:0,end:l.options[0].start,style:slot.question,label:slot.question.listText.replace(/%\d/g,String(index+1)),bold:false},...l.options.map(o=>({start:o.body,end:o.end,style:slot.option,label:slot.option.listText.replace(/%\d/g,slot.option.format==='lowerLetter'?o.label.toLowerCase():o.label),bold:o.label===q.answer}))];
-  const result=[];
-  for(const group of groups){const nodes=segment(l,group.start,group.end);if(!nodes.length)throw Error('A selected question has an empty stem or option.');nodes.forEach(p=>applyRole(p,group.style,doc));prefix(nodes[0],group.label,group.style,group.bold,doc);result.push(...nodes);}
+  let l;
+  try{
+  l=layout(markedQuestion(q.xml,q.answer,q.number));if(l.options.length!==4)throw Error('A selected question has ambiguous options.');
+  const pictures=pictureOptionBlock(l),result=[];
+  if(pictures){
+   for(const p of children(l.doc.documentElement).filter(n=>n.nodeName==='w:p')){
+    const original=direct(p,'w:pPr')?.cloneNode(true);applyRole(p,result.length?slot.option:slot.question,doc);
+    if(original){for(const numbering of children(original).filter(n=>n.nodeName==='w:numPr'))original.removeChild(numbering);p.replaceChild(original,direct(p,'w:pPr'));}
+    if(!result.length)prefix(p,slot.question.listText.replace(/%\d/g,String(index+1)),slot.question,false,doc);
+    result.push(p);
+   }
+  }else{
+   const groups=[{start:0,end:l.options[0].start,style:slot.question,label:slot.question.listText.replace(/%\d/g,String(index+1)),bold:false},...l.options.map(o=>({start:o.body,end:o.end,style:slot.option,label:slot.option.listText.replace(/%\d/g,slot.option.format==='lowerLetter'?o.label.toLowerCase():o.label),bold:o.label===q.answer}))];
+   for(const group of groups){const nodes=segment(l,group.start,group.end);if(!nodes.length)throw Error('A selected question has an empty stem or option.');nodes.forEach(p=>applyRole(p,group.style,doc));prefix(nodes[0],group.label,group.style,group.bold,doc);result.push(...nodes);}
+  }
   result.forEach((p,i)=>{const pr=direct(p,'w:pPr');for(const tag of ['w:keepNext','w:keepLines'])for(const n of children(pr).filter(n=>n.nodeName===tag))pr.removeChild(n);pr.appendChild(doc.createElementNS(W,'w:keepLines'));if(i<result.length-1)pr.appendChild(doc.createElementNS(W,'w:keepNext'));});
-  importAssets(result,q.source.path);return result;
+  importAssets(result,q.source.path);
+  return result;
+  }catch(error){
+   error.status=422;error.details={generation_issues:[{filename:q.source.original_name||require('path').basename(q.source.path),campus:q.source.campus_name||(q.source.campus===1?'Ramapuram':q.source.campus===2?'Trichy':''),department:q.source.department_name||title,set:q.source.set_name||set,section:q.section,question:q.source_number??q.number??q.answer_key_number??index+1,question_text:q.answer_diagnostics?.question_text||l?.text.slice(0,l.options[0]?.start).trim(),remark:error.message}]};throw error;
+  }
  }
  const research=selected.filter(q=>q.section==='research'),subjects=selected.filter(q=>q.section==='subject');
  if(research.length!==25||![0,25].includes(subjects.length)||research.length+subjects.length!==selected.length)throw Error('A final paper needs 25 RM questions and either 25 subject questions or a Common RM paper with no subject section.');

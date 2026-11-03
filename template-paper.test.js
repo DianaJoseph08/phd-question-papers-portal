@@ -51,3 +51,7 @@ test('two-column admin answer-key tables keep their supplied layout',t=>{
  const output=generate(source(t),'Civil','A',templateFixture('A',{columns:2})),doc=new DOMParser().parseFromString(new Zip(output).file('word/document.xml').asText(),'application/xml');
  assert.equal(doc.getElementsByTagName('w:tr').length,51);assert.equal(doc.getElementsByTagName('w:gridCol').length,2);assert.ok(inspect(output).questions.every(q=>q.answer==='B'));
 });
+test('admin templates with Unicode dashes in Subject-Specific headings are accepted',t=>{
+ const template=new Zip(templateFixture('A'));template.file('word/document.xml',template.file('word/document.xml').asText().replace('Subject-Specific Questions','Subject–Specific Questions'));
+ const output=generate(source(t),'Chemistry','A',template.generate({type:'nodebuffer'}));assert.deepEqual(inspect(output).counts,{research:25,subject:25});
+});

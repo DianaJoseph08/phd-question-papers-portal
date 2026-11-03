@@ -39,7 +39,7 @@ function inspect(buffer,{subjectName,includeAnswers=true,includeNodes=false}={})
  const format=p=>listInfo(p)?.format;
  const heading=t=>{
   if(/^(?:(?:part|section)\s*[a1][.:) –—-]*\s*)?research\s+methodology\b/i.test(t))return 'research';
-  if(/^(?:(?:part|section)\s*[b2][.:) –—-]*\s*)?subject[ -]specific(?:\s+(?:questions|core\s+topics))?(?=\s*(?:$|\(|[0-9]))/i.test(t))return 'subject';
+  if(/^(?:(?:part|section)\s*[b2][.:) –—-]*\s*)?subject[\s\u2010-\u2015\u2212-]+specific(?:\s+(?:questions|core\s+topics))?(?=\s*(?:$|\(|[0-9]))/i.test(t))return 'subject';
   // Department-specific Section B headings (for example “Section B: Mathematics”).
   // Once Section A is Research Methodology, the paired Section B is the subject block.
   const paired=t.match(/^(?:part|section)\s*[b2][.:) –—-]+(.+)$/i);
@@ -56,7 +56,7 @@ function inspect(buffer,{subjectName,includeAnswers=true,includeNodes=false}={})
   let cell=p.parentNode;while(cell&&cell.nodeName!=='w:tc')cell=cell.parentNode;
   if(!cell||cell.parentNode?.nodeName!=='w:tr')return false;
   const cells=Array.from(cell.parentNode.childNodes).filter(n=>n.nodeName==='w:tc');
-  return cells[0]===cell&&cells.length>1&&cells.slice(1).some(c=>text(c).trim()||c.getElementsByTagName('w:drawing').length||c.getElementsByTagName('w:pict').length);
+  return cells[0]===cell&&cells.length>1&&cells.slice(1).some(c=>text(c).trim()||c.getElementsByTagName('w:drawing').length||c.getElementsByTagName('w:pict').length||c.getElementsByTagName('w:object').length);
  }
  let section=null,pending=[],pendingNodes=[],questions=[],started=false,number=null,displayNumber=null;
  function flush(){if(!pending.length)return;const combined=pending.map(x=>text(parse(x))).join('\n');questions.push({section:section||'unclassified',number,display_number:displayNumber,xml:pending.join(''),text:combined,hash:crypto.createHash('sha256').update(combined.toLowerCase().replace(/[^\p{L}\p{N}]/gu,'')).digest('hex'),...(includeNodes?{paragraphs:pendingNodes}: {})});pending=[];pendingNodes=[];}
@@ -69,7 +69,7 @@ function inspect(buffer,{subjectName,includeAnswers=true,includeNodes=false}={})
   if(nextSection){flush();section=nextSection;started=false;continue;}
   if(hasSections&&!section)continue;
   if(/^\(?25\s*(?:[×x]|1\s*=)/i.test(t))continue;
-  if(!t&&!p.getElementsByTagName('w:drawing').length&&!p.getElementsByTagName('m:oMath').length&&!p.getElementsByTagName('w:pict').length)continue;
+  if(!t&&!p.getElementsByTagName('w:drawing').length&&!p.getElementsByTagName('m:oMath').length&&!p.getElementsByTagName('w:pict').length&&!p.getElementsByTagName('w:object').length)continue;
   const list=listInfo(p),lettered=['lowerLetter','upperLetter'].includes(list?.format);
   let listNumber=null;
   if(list){
@@ -106,7 +106,7 @@ function inspect(buffer,{subjectName,includeAnswers=true,includeNodes=false}={})
   const boundary=(manual||automatic)&&(section||started||questionLike||firstQuestionCell(p,t));
   if(boundary){flush();number=manual?Number(manual[1]):null;displayNumber=number??listNumber;started=true;}
   if(!started)continue;
-  if(!t&&!p.getElementsByTagName('w:drawing').length&&!p.getElementsByTagName('m:oMath').length&&!p.getElementsByTagName('w:pict').length)continue;
+  if(!t&&!p.getElementsByTagName('w:drawing').length&&!p.getElementsByTagName('m:oMath').length&&!p.getElementsByTagName('w:pict').length&&!p.getElementsByTagName('w:object').length)continue;
   let xml=serialize(p);
   if(['lowerLetter','upperLetter'].includes(format(p))&&pending.length&&!/^\(?[A-Da-d][.)]/.test(t)){
    const label=String.fromCharCode(65+(listNumber-1))+') ';

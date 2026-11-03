@@ -1,5 +1,5 @@
 const {test}=require('node:test'),assert=require('node:assert/strict'),Zip=require('pizzip');
-const {commonFor,inspectForDepartment,validateTemplate}=require('./submission-policy');
+const {commonFor,inspectForDepartment,validateTemplate,placeholderRemark}=require('./submission-policy');
 const {choose}=require('./papers');
 const linked={id:1,campus_id:1,institution:'Faculty of Engineering and Technology',common_rm_id:201};
 function fixture(sections,options='A) alpha B) beta C) gamma D) delta'){
@@ -88,4 +88,27 @@ test('option-formatting issues do not block freshness screening',()=>{
  body+=p('Answer Key');z.file('word/document.xml',`<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>${body}</w:body></w:document>`);
  const d={id:8,campus_id:1,institution:'Faculty of Engineering and Technology',common_rm_id:201},info=inspectForDepartment(z.generate({type:'nodebuffer'}),d),validation=validateTemplate(z.generate({type:'nodebuffer'}),d,info);
  assert.deepEqual(info.counts,{research:25,subject:25});assert.equal(validation.passed,true);assert.equal(validation.option_errors.length,50);assert.equal(validation.option_errors[0].question,1);assert.equal(validation.option_errors[0].missing,'A, B, C, D');
+});
+test('leftover template words in a completed option are identified without reporting a count or key mismatch',()=>{
+ const z=new Zip(),p=t=>`<w:p><w:r><w:t>${t}</w:t></w:r></w:p>`;let body=p('Subject-Specific Questions');
+ for(let i=26;i<=50;i++)body+=p(`${i}. Which result applies to chemistry sample ${i}? A) Conrotatory B) Disrotatory C) Either D) Forbidden${i===26?' Question Starts here':''}`);
+ body+=p('Answer Key');for(let i=26;i<=50;i++)body+=p(i+' B');
+ z.file('word/document.xml',`<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>${body}</w:body></w:document>`);
+ const buffer=z.generate({type:'nodebuffer'}),info=inspectForDepartment(buffer,linked),validation=validateTemplate(buffer,linked,info);
+ assert.deepEqual(info.counts,{research:0,subject:25});assert.equal(info.questions[0].answer,'B');assert.equal(info.questions[0].answer_error,null);assert.equal(validation.errors.length,1);assert.match(validation.errors[0],/Subject Question 26/);assert.match(validation.errors[0],/option D/);assert.match(validation.errors[0],/not an answer-key mismatch/);assert.ok(!validation.errors[0].includes('Provide 25'));
+ z.file('word/document.xml',z.file('word/document.xml').asText().replace('Forbidden Question Starts here','Forbidden'));const fixed=z.generate({type:'nodebuffer'});assert.equal(validateTemplate(fixed,linked,inspectForDepartment(fixed,linked)).passed,true);
+});
+test('a genuinely empty template question remains clearly identified as an unused placeholder',()=>{
+ const q={xml:'<w:p><w:r><w:t>1. Question Starts here A) Option A B) Option B C) Option C D) Option D</w:t></w:r></w:p>'};assert.match(placeholderRemark(q),/Replace this unused question placeholder/);
+});
+test('Unicode Subject-Specific headings retain automatic questions 26-50 without counting candidate instructions',()=>{
+ const p=(text,num)=>`<w:p>${num?`<w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="${num}"/></w:numPr></w:pPr>`:''}<w:r><w:t>${text}</w:t></w:r></w:p>`;
+ for(const dash of ['–','—','‑','−',' - ']){
+  const z=new Zip();let body=p('Instructions to Candidates')+p('Mark one option on the answer sheet.',2)+p('Do not use calculators.',2)+p('Subject'+dash+'Specific Questions')+p('(25 × 1 = 25)');
+  for(let i=0;i<25;i++)body+=p('Eigen value of operator sample '+i+' is',1)+['zero','real positive','real negative','imaginary'].map(t=>p(t,100+i)).join('');
+  body+=p('Answer Key');for(let i=26;i<=50;i++)body+=p(i+' B');
+  z.file('word/document.xml',`<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>${body}</w:body></w:document>`);
+  z.file('word/numbering.xml',`<w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:abstractNum w:abstractNumId="0"><w:lvl w:ilvl="0"><w:start w:val="26"/><w:numFmt w:val="decimal"/></w:lvl></w:abstractNum><w:abstractNum w:abstractNumId="1"><w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="lowerLetter"/></w:lvl></w:abstractNum><w:abstractNum w:abstractNumId="2"><w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="decimal"/></w:lvl></w:abstractNum><w:num w:numId="1"><w:abstractNumId w:val="0"/></w:num><w:num w:numId="2"><w:abstractNumId w:val="2"/></w:num>${Array.from({length:25},(_,i)=>`<w:num w:numId="${100+i}"><w:abstractNumId w:val="1"/></w:num>`).join('')}</w:numbering>`);
+  const buffer=z.generate({type:'nodebuffer'}),info=inspectForDepartment(buffer,{...linked,name:'Chemistry'});assert.deepEqual(info.counts,{research:0,subject:25},dash);assert.equal(info.questions[0].source_number,26);assert.equal(info.questions.at(-1).source_number,50);assert.ok(info.questions.every(q=>q.answer==='B'&&!q.answer_error));assert.equal(validateTemplate(buffer,linked,info).passed,true);
+ }
 });

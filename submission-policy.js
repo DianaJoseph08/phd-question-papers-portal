@@ -8,6 +8,12 @@ function commonFor(d){
  return null;
 }
 const placeholder=q=>/\b(?:the\s+)?question\s+starts?\s+here\b/i.test(q.text);
+function placeholderRemark(q){
+ const l=require('./answers').layout(q.xml),options=l.options.filter(o=>placeholder({text:l.text.slice(o.body,o.end)}));
+ if(options.length)return 'Remove the leftover template words "Question Starts here" from option '+options.map(o=>o.label).join(', ')+'.'+(q.answer&&!q.answer_error?' The question was recognized; this is not an answer-key mismatch.':'');
+ const stem=l.text.slice(0,l.options[0]?.start??l.text.length).replace(/^\s*(?:\d+[.)]?\s*)?/,'').trim();
+ return /^(?:the\s+)?question\s+starts?\s+here[.\s]*$/i.test(stem)?'Replace this unused question placeholder with a real question.':'Remove the leftover template words "Question Starts here" from the question text.';
+}
 function inspectForDepartment(buffer,d,{includeAnswers=true}={}){
  const info=inspect(buffer,{subjectName:d.is_common?undefined:d.name,includeAnswers:false}),warnings=[];
  // A common-RM department may leave the unused RM template placeholders in place.
@@ -30,7 +36,9 @@ function inspectForDepartment(buffer,d,{includeAnswers=true}={}){
 }
 function validateTemplate(buffer,d,info){
  const errors=[],warnings=[...info.warnings];
- if(!info.valid)errors.push(d.is_common?'Provide 25 numbered Research Methodology questions.':d.common_rm_id?'Provide 25 numbered subject questions. Your assigned coordinator supplies Common RM. A complete 25 RM + 25 subject paper is also accepted.':'Provide 25 numbered Research Methodology questions and 25 numbered subject questions under their section headings.');
+ const {research,subject,unclassified=0}=info.counts,full=research===25&&subject===25&&!unclassified,subjectOnly=research===0&&subject===25&&!unclassified,researchOnly=research===25&&subject===0&&!unclassified;
+ if(!(d.is_common?researchOnly:full||Boolean(d.common_rm_id&&subjectOnly)))errors.push(d.is_common?'Provide 25 numbered Research Methodology questions.':d.common_rm_id?'Provide 25 numbered subject questions. Your assigned coordinator supplies Common RM. A complete 25 RM + 25 subject paper is also accepted.':'Provide 25 numbered Research Methodology questions and 25 numbered subject questions under their section headings.');
+ for(const [i,q] of info.questions.entries())if(placeholder(q))errors.push((q.section==='research'?'RM':'Subject')+' Question '+(q.source_number??q.number??i+1)+': '+placeholderRemark(q));
  const option_errors=[];
  function optionLabels(question){
   return new Set(require('./answers').layout(question.xml).options.map(o=>o.label));
@@ -46,4 +54,4 @@ function validateTemplate(buffer,d,info){
  const answer_errors=info.questions.filter(q=>q.answer_error).map(q=>require('./answers').answerRemark(q,info.questions.indexOf(q)));
  return {advisory:true,passed:errors.length===0,paper_type:info.paper_type,counts:info.counts,expected:d.is_common?'25 RM':d.common_rm_id?'25 subject (Common RM supplied separately)':'25 RM + 25 subject',checks:['Word .docx format','Numbered question count and sections','No unfilled question placeholders'],errors,warnings,option_errors,answer_errors};
 }
-module.exports={commonFor,inspectForDepartment,validateTemplate,placeholder};
+module.exports={commonFor,inspectForDepartment,validateTemplate,placeholder,placeholderRemark};
