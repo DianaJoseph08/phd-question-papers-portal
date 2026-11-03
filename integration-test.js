@@ -11,7 +11,7 @@ function fixture(prefix,{research=false,full=false,repeat=0,researchRepeat=repea
  const p=t=>`<w:p><w:r><w:t>${t}</w:t></w:r></w:p>`;let body='';
  for(const section of full?['Research Methodology','Subject-Specific Questions']:[research?'Research Methodology':heading||'Subject-Specific Questions']){
   const repeats=section==='Research Methodology'?researchRepeat:repeat;
-  body+=p(tamil?(section==='Research Methodology'?'ஆராய்ச்சி நெறிமுறைகள்':'தமிழ் இலக்கிய வரலாறு'):section);for(let i=1;i<=count;i++){
+  body+=p(tamil?(section==='Research Methodology'?'ஆராய்ச்சி நெறிமுறைகள்':'இலக்கிய வரலாறு'):section);for(let i=1;i<=count;i++){
    if(matching&&section==='Research Methodology'&&i===1){
     body+=p('1. Match the following protocols for experiment '+prefix)+ '<w:tbl><w:tr><w:tc>'+p('List-I (Protocol)')+'</w:tc><w:tc>'+p('List-II (Property)')+'</w:tc></w:tr>';
     for(let n=1;n<=4;n++)body+='<w:tr><w:tc>'+p('ABCD'[n-1]+'. Protocol '+n)+'</w:tc><w:tc>'+p(n+'. Property '+n)+'</w:tc></w:tr>';
