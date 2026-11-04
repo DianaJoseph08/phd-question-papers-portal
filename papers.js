@@ -14,7 +14,7 @@ function inspect(buffer,{subjectName,includeAnswers=true,includeNodes=false}={})
  const zip=new Zip(buffer); const entry=zip.file('word/document.xml');
  if(!entry) throw Error('Upload a valid Word .docx document.');
  if(entry.asText().length>15000000) throw Error('Document is too large to process.');
- const doc=parse(entry.asText()); const paragraphs=Array.from(doc.getElementsByTagName('w:p'));
+ const doc=parse(entry.asText()); let paragraphs=Array.from(doc.getElementsByTagName('w:p'));
  // The paper's marks summary is metadata, even when its cells contain section names and numbers.
  const summaryTables=new Set(Array.from(doc.getElementsByTagName('w:tbl')).filter(table=>{
   const row=Array.from(table.childNodes).find(n=>n.nodeName==='w:tr');if(!row)return false;
@@ -53,6 +53,8 @@ function inspect(buffer,{subjectName,includeAnswers=true,includeNodes=false}={})
   if(subjectName&&title.toLowerCase()===subjectName.trim().toLowerCase())return 'subject';
   return null;
  };
+ require('./word-question-paragraphs').splitQuestionParagraphs(doc,{text,heading,isAnswerKeyHeading,inSummary});
+ paragraphs=Array.from(doc.getElementsByTagName('w:p'));
  const hasSections=paragraphs.some(p=>!inSummary(p)&&!p.getElementsByTagName('w:numPr').length&&heading(text(p).trim()));
  function firstQuestionCell(p,t){
   if(!/^1[.)]?$/.test(t))return false;
@@ -106,12 +108,12 @@ function inspect(buffer,{subjectName,includeAnswers=true,includeNodes=false}={})
   }
   // A bare question number is accepted only with a complete labelled option block ahead.
   // This avoids treating a numerical value in an option or continuation as a question.
-  const bare=t.match(/^(?:Q(?:uestion)?[ \t]+)?(\d{1,3})[ \t]+(?=[\p{L}(])/iu);
+  const bare=t.match(/^(?:Q(?:uestion)?[ \t]+)?(\d{1,3})[ \t]+(?=[\p{L}("'‘’“”])/iu);
   const previousLabels=new Set();if(bare&&pending.length)for(const m of pending.map(x=>text(parse(x))).join('\n').matchAll(/(?:^|(?<=\s))(?:\(([A-Da-d])\)|([A-Da-d])[.):])[ \t]*/g))previousLabels.add((m[1]||m[2]).toUpperCase());
   const followsQuestion=!pending.length||((number===null||Number(bare?.[1])===number+1)&&['A','B','C','D'].every(label=>previousLabels.has(label)));
   if(!manual&&bare&&followsQuestion&&!(pending.length&&['lowerLetter','upperLetter'].includes(format(p)))){
-   const labels=new Set();let found=false;
-   for(let index=paragraphIndex+1;index<Math.min(paragraphs.length,paragraphIndex+12);index++){
+   const labels=new Set(layout(serialize(p)).options.map(o=>o.label));let found=['A','B','C','D'].every(label=>labels.has(label));
+   for(let index=paragraphIndex+1;!found&&index<Math.min(paragraphs.length,paragraphIndex+12);index++){
     const ahead=text(paragraphs[index]).trim();
     if(heading(ahead)||isAnswerKeyHeading(ahead)||/^(?:Q(?:uestion)?\s*\.?\s*)?\d{1,3}[.)]\s*\D/i.test(ahead))break;
     for(const m of ahead.matchAll(/(?:^|(?<=\s))(?:\(([A-Da-d])\)|([A-Da-d])[.):])[ \t]*/g))labels.add((m[1]||m[2]).toUpperCase());
