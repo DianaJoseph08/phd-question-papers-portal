@@ -1,7 +1,7 @@
 const Zip = require('pizzip');
 const {DOMParser, XMLSerializer} = require('@xmldom/xmldom');
 const crypto = require('crypto');
-const {attachAnswers,layout,choiceInstructions}=require('./answers');
+const {attachAnswers,layout,choiceInstructions,isMatchingQuestion}=require('./answers');
 const {tamilSectionHeading,tamilKeyHeading}=require('./localized-headings');
 const {questionHash}=require('./question-hash');
 const ns = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
@@ -71,7 +71,7 @@ function inspect(buffer,{subjectName,includeAnswers=true,includeNodes=false}={})
  function matchingListEntry(p,value){
   if(!pending.length)return false;
   const stem=pending.map(x=>text(parse(x))).join('\n');
-  if(!/\bmatch\s+(?:the\s+)?following\b/i.test(stem))return false;
+  if(!isMatchingQuestion(stem))return false;
   for(let node=p.parentNode;node;node=node.parentNode)if(matchingTables.has(node)){matchingTable=node;return true;}
   // An actual Word table supplies its own boundary, including if its choices
   // are incomplete. Flattened/generated lists use their sequential item labels.
@@ -131,8 +131,10 @@ function inspect(buffer,{subjectName,includeAnswers=true,includeNodes=false}={})
   if(!started)continue;
   if(!t&&!p.getElementsByTagName('w:drawing').length&&!p.getElementsByTagName('m:oMath').length&&!p.getElementsByTagName('w:pict').length&&!p.getElementsByTagName('w:object').length)continue;
   let xml=serialize(p);
-  if(['lowerLetter','upperLetter'].includes(format(p))&&pending.length&&!/^\(?[A-Da-d][.)]/.test(t)){
-   const label=String.fromCharCode(65+(listNumber-1))+') ';
+  const roman=['lowerRoman','upperRoman'].includes(list?.format);
+  if(pending.length&&(lettered&&!/^\(?[A-Da-d][.)]/.test(t)||roman&&!/^\(?[ivxlcdm]+[.)]\s/i.test(t))){
+   let value='';if(roman){if(!Number.isSafeInteger(listNumber)||listNumber<1||listNumber>3999)value=String(listNumber);else{let remaining=listNumber;for(const [amount,digits]of [[1000,'M'],[900,'CM'],[500,'D'],[400,'CD'],[100,'C'],[90,'XC'],[50,'L'],[40,'XL'],[10,'X'],[9,'IX'],[5,'V'],[4,'IV'],[1,'I']])while(remaining>=amount){value+=digits;remaining-=amount;}}if(list.format==='lowerRoman')value=value.toLowerCase();}
+   const label=roman?value+'. ':String.fromCharCode(65+(listNumber-1))+') ';
    const cloned=p.cloneNode(true),r=doc.createElementNS(ns,'w:r'),tNode=doc.createElementNS(ns,'w:t');
    tNode.setAttribute('xml:space','preserve');tNode.appendChild(doc.createTextNode(label));r.appendChild(tNode);
    const pPr=cloned.getElementsByTagName('w:pPr')[0];cloned.insertBefore(r,pPr?pPr.nextSibling:cloned.firstChild);xml=serialize(cloned);

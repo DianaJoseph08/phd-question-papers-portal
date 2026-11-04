@@ -1,7 +1,7 @@
 const express=require('express'), multer=require('multer'), sqlite=require('sqlite3'), fs=require('fs'), path=require('path'), crypto=require('crypto');
 const {inspect,choose,generate}=require('./papers');
 const {screen,departmentKey}=require('./screening');
-const {generationHashes}=require('./question-hash');
+const {generationHashes,generationSourceKeys,sourceQuestionKey}=require('./question-hash');
 const {commonFor,inspectForDepartment,validateTemplate,placeholder,placeholderRemark}=require('./submission-policy');
 const {setFromFilename,wordFileError}=require('./public/upload-set');
 const cloudStorage=require('./cloud_storage');
@@ -286,8 +286,8 @@ post('/api/generate',requireAdmin,async(req,res)=>{
  // Keep the current final A/B pair distinct. Superseded drafts must not
  // consume the available question pool when a final set is regenerated.
  const opposite=await all(persistence.db,'SELECT manifest FROM generations WHERE department_key=? AND set_name<>? ORDER BY created_at DESC,rowid DESC LIMIT 1',[departmentKey(department),set]);
- const excluded=generationHashes(opposite.flatMap(g=>JSON.parse(g.manifest)));
- pools.forEach(p=>p.questions=p.questions.filter(q=>!excluded.has(q.hash)));
+ const previousQuestions=opposite.flatMap(g=>JSON.parse(g.manifest)),excluded=generationHashes(previousQuestions),excludedSources=generationSourceKeys(previousQuestions);
+ pools.forEach(p=>p.questions=p.questions.filter(q=>!excluded.has(q.hash)&&!excludedSources.has(sourceQuestionKey(p.id,q.section,q.source_number??q.number??q.answer_key_number))));
  const chosen=choose(pools,campusCount<2,set,department.is_common,sectionCampuses);const id=crypto.randomUUID(),file=path.join(data,'files',id+'.docx');
  const buffer=generate(chosen,department.name,set,templateBuffer,{facultyName:department.institution});fs.writeFileSync(file,buffer);
  await cloudStorage.putDocument(file,'files/'+id+'.docx');

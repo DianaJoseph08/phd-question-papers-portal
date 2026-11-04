@@ -5,6 +5,7 @@ const parse=xml=>new DOMParser().parseFromString(xml,'application/xml');
 const serialize=n=>new XMLSerializer().serializeToString(n);
 function content(node){let result='';function visit(n){if(['w:t','m:t'].includes(n.nodeName))result+=n.textContent;else if(['w:br','w:cr'].includes(n.nodeName))result+='\n';else if(n.nodeName==='w:tab')result+='\t';else for(let c=n.firstChild;c;c=c.nextSibling)visit(c);}visit(node);return result;}
 function questionDoc(xml){return parse(`<root xmlns:w="${ns}">${xml}</root>`);}
+const isMatchingQuestion=text=>/\bmatch\s+(?:(?:the\s+)?following\b|(?:the\s+)?list[\s\u2010-\u2015-]*(?:i|1)\b)/i.test(text);
 function choiceInstructions(text){
  return [...text.matchAll(/(?:^|\n)[ \t]*(?:codes?\s*[:：]|(?:choose|select)\s+(?:the\s+)?correct\s+(?:answer|option)\s+from\s+(?:the\s+)?options?\s+given\s+below[ \t]*[:：]?[ \t]*)/gi)];
 }
@@ -34,9 +35,10 @@ function layout(xml){
  }
  // Matching-column entries A–D belong to the stem when a separate A–D list
  // explicitly supplies the four numbered pairings below them.
- if(/\bmatch\s+(?:the\s+)?following\b/i.test(text)&&matches.length===8&&matches.map(m=>(m[1]||m[2]).toUpperCase()).join('')==='ABCDABCD'){
-  const tail=matches.slice(-4),pairings=tail.every((m,i)=>/^(?:(?:\d+[ \t]*[-–—=:][ \t]*[a-d]|[a-d][ \t]*[-–—=:][ \t]*\d+)[; ,\t\n]*){2,}$/i.test(text.slice(m.index+m[0].length,tail[i+1]?.index??text.length).trim()));
-  if(pairings){matches=tail;separateChoices=true;}
+ if(isMatchingQuestion(text)){
+  const pairing=value=>/^(?:(?:\d+[ \t]*[-–—=:][ \t]*(?:[a-d]|[ivxlcdm]+)|(?:[a-d]|[ivxlcdm]+)[ \t]*[-–—=:][ \t]*\d+)[; ,\t\n]*){2,}$/i.test(value.trim());
+  const tail=matches.slice(-4),pairings=tail.length===4&&tail.map(m=>(m[1]||m[2]).toUpperCase()).join('')==='ABCD'&&tail.every((m,i)=>pairing(text.slice(m.index+m[0].length,tail[i+1]?.index??text.length))),firstAreChoices=matches.length===8&&matches.slice(0,4).every((m,i)=>pairing(text.slice(m.index+m[0].length,matches[i+1].index)));
+  if(pairings&&(matches.length===4||matches.length===8&&!firstAreChoices&&matches.map(m=>(m[1]||m[2]).toUpperCase()).join('')==='ABCDABCD')){matches=tail;separateChoices=true;}
  }
  // Some statement-combination questions omit an instruction line. Distinguish
  // their final reference-only choices from the preceding statement list while
@@ -159,4 +161,4 @@ function markedQuestion(xml,answer,number=null){
  return Array.from(l.doc.documentElement.childNodes).map(serialize).join('');
 }
 function answerRemark(q,index=0){return {question:q.source_number??q.number??q.display_number??index+1,section:q.section,remark:q.answer_error||'Correct answer missing.',...q.answer_diagnostics};}
-module.exports={attachAnswers,markedQuestion,layout,answerRemark,choiceInstructions};
+module.exports={attachAnswers,markedQuestion,layout,answerRemark,choiceInstructions,isMatchingQuestion};

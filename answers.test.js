@@ -83,20 +83,32 @@ test('adjacent bare option labels with equations retain all four labels and bold
  assert.equal(l.doc.getElementsByTagName('w:keepNext').length,4);assert.equal(l.doc.getElementsByTagName('w:keepLines').length,5);
 });
 
-function matchingPaper({codes=true,table=true,automatic=false}={}){
- const data=[];for(let i=1;i<=4;i++)data.push([p('ABCD'[i-1]+'. Protocol '+i),automatic?numbered('Property '+i,9,0):p(i+'. Property '+i)]);
+function matchingPaper({codes=true,table=true,automatic=false,roman=false,stem='Match the following protocols with their properties.'}={}){
+ const data=[];for(let i=1;i<=4;i++)data.push([roman?numbered('Protocol '+i,10,0):p('ABCD'[i-1]+'. Protocol '+i),automatic?numbered('Property '+i,9,0):p(i+'. Property '+i)]);
  const columns=[p('List-I (Protocol)'),p('List-II (Property)')];
- const stem=table?'<w:tbl>'+[columns,...data].map(cells=>'<w:tr>'+cells.map(xml=>'<w:tc>'+xml+'</w:tc>').join('')+'</w:tr>').join('')+'</w:tbl>':[...columns,...data.flat()].join('');
- let body=p('Research Methodology')+p('1. Match the following protocols with their properties.')+stem+(codes?p('Codes:'):'');
- const choices=['A-3, B-2, C-1, D-4','A-1, B-3, C-4, D-2','A-3, B-1, C-2, D-4','A-4, B-1, C-3, D-2'];for(let i=0;i<4;i++)body+=p('('+'ABCD'[i]+') '+choices[i]);
+ const columnsBody=table?'<w:tbl>'+[columns,...data].map(cells=>'<w:tr>'+cells.map(xml=>'<w:tc>'+xml+'</w:tc>').join('')+'</w:tr>').join('')+'</w:tbl>':[...columns,...data.flat()].join('');
+ let body=p('Research Methodology')+p('1. '+stem)+columnsBody+(codes?p('Codes:'):'');
+ const choices=roman?['I-1, II-2, III-3, IV-4','I-2, II-1, III-4, IV-3','I-3, II-4, III-1, IV-2','I-4, II-3, III-2, IV-1']:['A-3, B-2, C-1, D-4','A-1, B-3, C-4, D-2','A-3, B-1, C-2, D-4','A-4, B-1, C-3, D-2'];for(let i=0;i<4;i++)body+=p('('+'ABCD'[i]+') '+choices[i]);
  for(let i=2;i<=25;i++)body+=question(i);
  body+=p('Subject-Specific Questions');for(let i=26;i<=50;i++)body+=question(i);body+=p('Answer Key');for(let i=1;i<=50;i++)body+=p(i+' '+(i===1?'C':'B'));
- return automatic?numberedDoc(body,list(9,level(0,'decimal'))):doc(body);
+ return automatic||roman?numberedDoc(body,(automatic?list(9,level(0,'decimal')):'')+(roman?list(10,level(0,'upperRoman')):'')):doc(body);
 }
 test('numbered matching-table entries stay in question 1 and all 50 answers use the visible question number',()=>{
  for(const options of [{},{table:false},{codes:false},{automatic:true}]){
   const info=inspect(matchingPaper(options));assert.deepEqual(info.counts,{research:25,subject:25});assert.deepEqual(info.questions.map(q=>q.source_number),Array.from({length:50},(_,i)=>i+1));assert.ok(info.questions.every(q=>q.answer_key_number===q.source_number&&!q.answer_error));assert.equal(info.questions[0].answer,'C');assert.ok(info.questions[0].answer_diagnostics.question_text.includes('4. Property 4')||options.automatic);
  }
+});
+test('Match List I/List II variants preserve Roman labels without counting their numbered table entries as questions',()=>{
+ for(const stem of ['Match the LIST-I with LIST-II','Match List I with List II','Match the following']){
+  const info=inspect(matchingPaper({roman:true,codes:false,stem}));assert.deepEqual(info.counts,{research:25,subject:25});assert.ok(info.questions.every(q=>q.answer&&!q.answer_error&&q.answer_key_number===q.source_number));for(const numeral of ['I','II','III','IV'])assert.ok(info.questions[0].text.includes(numeral+'. Protocol'));assert.equal(layout(info.questions[0].xml).separateChoices,true);
+ }
+});
+test('shuffled Roman matching questions at final position four do not absorb the following question five',t=>{
+ const fs=require('fs'),os=require('os'),path=require('path'),{generate}=require('./papers'),{examCopy}=require('./exam-copy'),dir=fs.mkdtempSync(path.join(os.tmpdir(),'qp-roman-matching-'));t.after(()=>{assert.ok(path.resolve(dir).startsWith(path.resolve(os.tmpdir())+path.sep));fs.rmSync(dir,{recursive:true,force:true});});
+ const buffer=matchingPaper({roman:true,codes:false,stem:'Match List I with List II'}),file=path.join(dir,'source.docx');fs.writeFileSync(file,buffer);const qs=inspect(buffer).questions,selected=[...qs.slice(1,4),qs[0],...qs.slice(4)].map(q=>({...q,source:{path:file}})),output=generate(selected,'Commerce','B',require('./test-template').templateFixture('B')),info=inspect(output);assert.deepEqual(info.counts,{research:25,subject:25});assert.equal(info.questions[3].answer,'C');assert.equal(info.questions[4].source_number,5);assert.ok(info.questions[3].text.includes('IV. Protocol 4'));assert.ok(info.questions.every(q=>q.answer&&!q.answer_error));assert.deepEqual(inspect(examCopy(output)).counts,{research:25,subject:25});
+});
+test('two genuine pairing-choice lists remain flagged as duplicate answer labels',()=>{
+ let body=p('Subject-Specific Questions')+p('35. Match List I with List II');for(let block=0;block<2;block++)for(const label of ['A','B','C','D'])body+=p(label+') I-1, II-2, III-3, IV-4');body+=p('Answer Key')+p('35 C');const q=inspect(doc(body)).questions[0];assert.equal(q.answer,null);assert.match(q.answer_error,/2 occurrences/);
 });
 test('an incomplete matching choice list never consumes the real questions following its table',()=>{
  const z=new Zip(matchingPaper({codes:false}));z.file('word/document.xml',z.file('word/document.xml').asText().replace('(D) A-4, B-1, C-3, D-2','Unlabelled fourth answer'));

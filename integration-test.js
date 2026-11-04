@@ -18,7 +18,7 @@ function fixture(prefix,{research=false,full=false,repeat=0,researchRepeat=repea
     for(const label of ['A','B','C','D'])body+=p(label+') Option '+label);continue;
    }
    if(matching&&section==='Research Methodology'&&i===1){
-    body+=p('1. Match the following protocols for experiment '+prefix)+ '<w:tbl><w:tr><w:tc>'+p('List-I (Protocol)')+'</w:tc><w:tc>'+p('List-II (Property)')+'</w:tc></w:tr>';
+    body+=p('1. Match the LIST-I with LIST-II for experiment '+prefix)+ '<w:tbl><w:tr><w:tc>'+p('List-I (Protocol)')+'</w:tc><w:tc>'+p('List-II (Property)')+'</w:tc></w:tr>';
     for(let n=1;n<=4;n++)body+='<w:tr><w:tc>'+p('ABCD'[n-1]+'. Protocol '+n)+'</w:tc><w:tc>'+p(n+'. Property '+n)+'</w:tc></w:tr>';
     body+='</w:tbl>'+p('Codes:');for(const label of ['A','B','C','D'])body+=p('('+label+') A-3, B-1, C-2, D-4');continue;
    }
